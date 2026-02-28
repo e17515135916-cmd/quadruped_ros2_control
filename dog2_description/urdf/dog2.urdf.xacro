@@ -72,7 +72,7 @@
 
   <!-- Leg macro -->
   <xacro:macro name="leg" params="prefix leg_num xyz rpy p_low p_up thigh_xyz shin_xyz slider_inertia_xyz
-                                 hip_rpy:='0 0 0' hip_xyz:='-0.016 0.0199 0.055'
+                                 hip_rpy:='0 0 1.5708' hip_xyz:='-0.016 0.0199 0.055'
                                  knee_xyz:='-0.0233 -0.055 0.0274'
                                  thigh_rpy:='0 0 0' thigh_col_rpy:='0 0 0'">
 
@@ -134,7 +134,7 @@
     <origin rpy="${hip_rpy}" xyz="${hip_xyz}"/>
     <parent link="l${leg_num}"/>
     <child link="${prefix}_hip_link"/>
-    <axis xyz="0 0 1"/>
+    <axis xyz="-1 0 0"/>
     <limit effort="${hip_effort}" lower="${hip_lower_limit}" upper="${hip_upper_limit}" velocity="${hip_velocity}"/>
   </joint>
 
@@ -162,10 +162,10 @@
   </link>
 
   <joint name="${prefix}_hfe_joint" type="revolute">
-    <origin rpy="1.5708 0 0" xyz="${knee_xyz}"/>
+    <origin rpy="1.5708 1.5708 0" xyz="${knee_xyz}"/>
     <parent link="${prefix}_hip_link"/>
     <child link="${prefix}_upper_leg_link"/>
-    <axis xyz="0 0 1"/>
+    <axis xyz="-1 0 0"/>
     <limit effort="${knee_effort}" lower="${knee_lower_limit}" upper="${knee_upper_limit}" velocity="${knee_velocity}"/>
   </joint>
 
@@ -196,7 +196,7 @@
     <origin rpy="0 0 0" xyz="0 -0.15201 0.12997"/>
     <parent link="${prefix}_upper_leg_link"/>
     <child link="${prefix}_lower_leg_link"/>
-    <axis xyz="0 0 1"/>
+    <axis xyz="-1 0 0"/>
     <limit effort="${knee_effort}" lower="${knee_lower_limit}" upper="${knee_upper_limit}" velocity="${knee_velocity}"/>
   </joint>
 
@@ -213,21 +213,20 @@
   </xacro:macro>
 
   <!-- Leg instantiations -->
-  <xacro:leg prefix="lf" leg_num="1" xyz="1.1026 -0.80953 0.2649" rpy="0 0 0" p_low="-0.111" p_up="0.0"
-             thigh_xyz="${leg12_thigh_xyz}" shin_xyz="${leg12_shin_xyz}" slider_inertia_xyz="${l1_inertia_xyz}"
-             hip_rpy="0 0 0"/>
+  <xacro:leg prefix="lf" leg_num="1" xyz="1.1026 -0.80953 0.2649" rpy="1.5708 0 0" p_low="-0.111" p_up="0.0"
+             thigh_xyz="${leg12_thigh_xyz}" shin_xyz="${leg12_shin_xyz}" slider_inertia_xyz="${l1_inertia_xyz}"/>
 
-  <xacro:leg prefix="rf" leg_num="2" xyz="1.3491 -0.80953 0.2649" rpy="0 0 3.1416" p_low="0.0" p_up="0.111"
+  <xacro:leg prefix="rf" leg_num="2" xyz="1.3491 -0.80953 0.2649" rpy="1.5708 0 0" p_low="0.0" p_up="0.111"
              thigh_xyz="${leg12_thigh_xyz}" shin_xyz="${leg12_shin_xyz}" slider_inertia_xyz="${l2_inertia_xyz}"
-             hip_xyz="0.016 0.0199 0.055" hip_rpy="0 0 0"/>
+             hip_xyz="0.016 0.0199 0.055"/>
 
-  <xacro:leg prefix="lh" leg_num="3" xyz="1.3491 -0.68953 0.2649" rpy="0 0 0" p_low="-0.111" p_up="0.0"
+  <xacro:leg prefix="lh" leg_num="3" xyz="1.3491 -0.68953 0.2649" rpy="1.5708 0 -3.1416" p_low="-0.111" p_up="0.0"
              thigh_xyz="${leg3_thigh_xyz}" shin_xyz="${leg3_shin_xyz}" slider_inertia_xyz="${l3_inertia_xyz}"
-             hip_rpy="0 0 3.1416" knee_xyz="-0.0233 -0.055 -0.0254"/>
+             hip_rpy="3.1416 0 1.5708" knee_xyz="-0.0233 -0.055 -0.0254"/>
 
-  <xacro:leg prefix="rh" leg_num="4" xyz="1.1071 -0.68953 0.2649" rpy="0 0 3.1416" p_low="0.0" p_up="0.111"
+  <xacro:leg prefix="rh" leg_num="4" xyz="1.1071 -0.68953 0.2649" rpy="1.5708 0 -3.1416" p_low="0.0" p_up="0.111"
              thigh_xyz="${leg4_thigh_xyz}" shin_xyz="${leg4_shin_xyz}" slider_inertia_xyz="${l4_inertia_xyz}"
-             hip_rpy="0 0 3.1416" hip_xyz="0.0116 0.0199 0.055" knee_xyz="-0.0233 -0.055 -0.0254"
+             hip_rpy="3.1416 0 1.5708" hip_xyz="0.0116 0.0199 0.055" knee_xyz="-0.0233 -0.055 -0.0254"
              thigh_rpy="0 3.1416 0" thigh_col_rpy="0 3.1416 0"/>
 
   <!-- ROS 2 Control -->

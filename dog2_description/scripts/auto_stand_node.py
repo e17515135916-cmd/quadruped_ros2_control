@@ -54,18 +54,16 @@ class AutoStandNode(Node):
         rclpy.shutdown()
         
     def send_standing_pose(self):
-        """发送蜘蛛型站立姿态 (适配统一坐标系)"""
-        # 在统一坐标系下 (Z轴向上)：
-        # HAA (侧摆): 0.0 (居中)
-        # HFE (大腿): 0.8 (向外展)
-        # KFE (膝盖): 1.5 (向下支撑)
-        # 注意：由于 HFE 是绕 Z 旋转（经过 RPY=1.57 0 0 变换后的局部轴）
-        # 具体的数值可能需要根据仿真效果微调
+        """发送蜘蛛型站立姿态"""
+        # 蜘蛛型姿态：腿部向外平展，Knee 关节向下弯曲支撑
+        # HAA (Hip): 0.0 (居中)
+        # HFE (Upper): 0.6 (向外展)
+        # KFE (Lower): 1.2 (向下弯)
         standing_positions = [
-            0.0, 0.8, 1.5,  # LF
-            0.0, 0.8, 1.5,  # RF
-            0.0, 0.8, 1.5,  # LH
-            0.0, 0.8, 1.5   # RH
+            0.0, 0.6, 1.2,  # LF
+            0.0, 0.6, 1.2,  # RF
+            0.0, 0.6, 1.2,  # LH
+            0.0, 0.6, 1.2   # RH
         ]
         
         point = JointTrajectoryPoint()
