@@ -1,0 +1,20 @@
+/**:
+  ros__parameters:
+    joint_controller_topic: /joint_trajectory_controller/joint_trajectory
+    joints_map:
+      left_front:
+      - lf_haa_joint
+      - lf_hfe_joint
+      - lf_kfe_joint
+      right_front:
+      - rf_haa_joint
+      - rf_hfe_joint
+      - rf_kfe_joint
+      left_hind:
+      - lh_haa_joint
+      - lh_hfe_joint
+      - lh_kfe_joint
+      right_hind:
+      - rh_haa_joint
+      - rh_hfe_joint
+      - rh_kfe_joint

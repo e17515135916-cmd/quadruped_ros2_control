@@ -1,0 +1,62 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 100  # Hz
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    rail_position_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+joint_state_broadcaster:
+  ros__parameters:
+    publish_rate: 100.0
+
+joint_trajectory_controller:
+  ros__parameters:
+    joints:
+      # Left Front leg (lf) - 3 revolute joints
+      - lf_haa_joint
+      - lf_hfe_joint
+      - lf_kfe_joint
+      # Right Front leg (rf) - 3 revolute joints
+      - rf_haa_joint
+      - rf_hfe_joint
+      - rf_kfe_joint
+      # Left Hind leg (lh) - 3 revolute joints
+      - lh_haa_joint
+      - lh_hfe_joint
+      - lh_kfe_joint
+      # Right Hind leg (rh) - 3 revolute joints
+      - rh_haa_joint
+      - rh_hfe_joint
+      - rh_kfe_joint
+    
+    command_interfaces:
+      - position
+    
+    state_interfaces:
+      - position
+      - velocity
+    
+    state_publish_rate: 100.0
+    action_monitor_rate: 20.0
+
+rail_position_controller:
+  ros__parameters:
+    joints:
+      - j1
+      - j2
+      - j3
+      - j4
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 100.0
+    action_monitor_rate: 20.0
+
