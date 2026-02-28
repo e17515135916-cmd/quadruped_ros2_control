@@ -53,12 +53,8 @@ def generate_launch_description():
     # 获取gazebo_ros包的launch文件路径
     gazebo_ros = get_package_share_directory('gazebo_ros')
 
-    # 启动Gazebo world：优先使用 champ_gazebo 的 outdoor.world；若未安装则回退到 empty.world
-    try:
-        champ_gazebo = get_package_share_directory('champ_gazebo')
-        world_path = os.path.join(champ_gazebo, 'worlds', 'outdoor.world')
-    except PackageNotFoundError:
-        world_path = os.path.join(gazebo_ros, 'worlds', 'empty.world')
+    # 启动Gazebo world
+    world_path = os.path.join(gazebo_ros, 'worlds', 'empty.world')
     
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
