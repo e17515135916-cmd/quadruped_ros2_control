@@ -231,18 +231,18 @@ private:
         auto joint_msg = sensor_msgs::msg::JointState();
         joint_msg.header.stamp = now;
         
-        // 所有关节名称（16个关节）
+        // 所有关节名称（16个关节，和 dog2.urdf.xacro 保持一致）
         joint_msg.name = {
             // 滑动副（4个）
             "j1", "j2", "j3", "j4",
             // 前左腿旋转关节（3个）
-            "j11", "j111", "j1111",
+            "lf_haa_joint", "lf_hfe_joint", "lf_kfe_joint",
             // 前右腿旋转关节（3个）
-            "j21", "j211", "j2111",
-            // 后右腿旋转关节（3个）
-            "j31", "j311", "j3111",
+            "rf_haa_joint", "rf_hfe_joint", "rf_kfe_joint",
             // 后左腿旋转关节（3个）
-            "j41", "j411", "j4111"
+            "lh_haa_joint", "lh_hfe_joint", "lh_kfe_joint",
+            // 后右腿旋转关节（3个）
+            "rh_haa_joint", "rh_hfe_joint", "rh_kfe_joint"
         };
         
         // 关节位置（16个）
@@ -258,11 +258,11 @@ private:
             std::sin(count_ * 0.1 + 3.14) * 0.3,
             std::sin(count_ * 0.1 + 4.14) * 0.2,
             std::sin(count_ * 0.1 + 5.14) * 0.1,
-            // 后右腿旋转关节（与前左腿同相）
+            // 后左腿旋转关节（与前左腿同相）
             std::sin(count_ * 0.1) * 0.3,
             std::sin(count_ * 0.1 + 1.0) * 0.2,
             std::sin(count_ * 0.1 + 2.0) * 0.1,
-            // 后左腿旋转关节（与前右腿同相）
+            // 后右腿旋转关节（与前右腿同相）
             std::sin(count_ * 0.1 + 3.14) * 0.3,
             std::sin(count_ * 0.1 + 4.14) * 0.2,
             std::sin(count_ * 0.1 + 5.14) * 0.1

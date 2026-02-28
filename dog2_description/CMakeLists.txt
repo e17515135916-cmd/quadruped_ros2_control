@@ -43,7 +43,9 @@ install(
 
 # Install Python scripts as executables
 install(
-  PROGRAMS scripts/auto_stand_node.py
+  PROGRAMS
+    scripts/auto_stand_node.py
+    scripts/spider_joint_smoke_test.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

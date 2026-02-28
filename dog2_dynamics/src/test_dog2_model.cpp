@@ -13,7 +13,7 @@ int main(int argc, char** argv) {
     try {
         // 加载模型
         std::string urdf_path = 
-            "/home/dell/aperfect/carbot_ws/src/panda_description/urdf/dog2.urdf";
+            "/home/dell/aperfect/carbot_ws/src/dog2_description/urdf/dog2.urdf";
         
         dog2_dynamics::Dog2Model model(urdf_path);
         
@@ -107,4 +107,3 @@ int main(int argc, char** argv) {
     rclcpp::shutdown();
     return 0;
 }
-

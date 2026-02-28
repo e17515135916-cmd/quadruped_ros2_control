@@ -24,8 +24,10 @@ import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
@@ -67,12 +69,15 @@ def generate_launch_description():
         }.items()
     )
     
-    # 加载Dog2 URDF
-    panda_desc_pkg = get_package_share_directory('panda_description')
-    urdf_file = os.path.join(panda_desc_pkg, 'urdf', 'dog2.urdf')
-    
-    with open(urdf_file, 'r') as f:
-        robot_description = f.read()
+    # 从 dog2.urdf.xacro 生成 robot_description（唯一真源）
+    xacro_file = PathJoinSubstitution([
+        FindPackageShare('dog2_description'),
+        'urdf', 'dog2.urdf.xacro'
+    ])
+    robot_description = ParameterValue(
+        Command(['xacro ', xacro_file]),
+        value_type=str
+    )
     
     # Robot State Publisher
     robot_state_publisher = Node(

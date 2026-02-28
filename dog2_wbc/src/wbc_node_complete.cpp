@@ -142,14 +142,14 @@ private:
             const std::string& name = msg->name[i];
             double pos = msg->position[i];
             
-            // 解析关节名称
-            if (name.find("hip_roll") != std::string::npos) {
+            // 解析关节名称（兼容旧命名和 dog2.urdf.xacro 的 lf/rf/lh/rh 命名）
+            if (name.find("hip_roll") != std::string::npos || name.find("_haa_joint") != std::string::npos) {
                 int leg = getLegIdFromName(name);
                 if (leg >= 0) leg_states_[leg].joint_angles(0) = pos;
-            } else if (name.find("hip_pitch") != std::string::npos) {
+            } else if (name.find("hip_pitch") != std::string::npos || name.find("_hfe_joint") != std::string::npos) {
                 int leg = getLegIdFromName(name);
                 if (leg >= 0) leg_states_[leg].joint_angles(1) = pos;
-            } else if (name.find("knee") != std::string::npos) {
+            } else if (name.find("knee") != std::string::npos || name.find("_kfe_joint") != std::string::npos) {
                 int leg = getLegIdFromName(name);
                 if (leg >= 0) leg_states_[leg].joint_angles(2) = pos;
             } else if (name == "j1") {
@@ -167,13 +167,17 @@ private:
     }
     
     int getLegIdFromName(const std::string& name) {
-        if (name.find("j1") != std::string::npos || name.find("leg1") != std::string::npos) {
+        if (name.find("lf_") != std::string::npos ||
+            name.find("j1") != std::string::npos || name.find("leg1") != std::string::npos) {
             return 0;
-        } else if (name.find("j2") != std::string::npos || name.find("leg2") != std::string::npos) {
+        } else if (name.find("rf_") != std::string::npos ||
+                   name.find("j2") != std::string::npos || name.find("leg2") != std::string::npos) {
             return 1;
-        } else if (name.find("j3") != std::string::npos || name.find("leg3") != std::string::npos) {
+        } else if (name.find("lh_") != std::string::npos ||
+                   name.find("j3") != std::string::npos || name.find("leg3") != std::string::npos) {
             return 2;
-        } else if (name.find("j4") != std::string::npos || name.find("leg4") != std::string::npos) {
+        } else if (name.find("rh_") != std::string::npos ||
+                   name.find("j4") != std::string::npos || name.find("leg4") != std::string::npos) {
             return 3;
         }
         return -1;

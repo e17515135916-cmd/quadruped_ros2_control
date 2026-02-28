@@ -35,6 +35,11 @@ public:
         RCLCPP_INFO(this->get_logger(), "  Horizon: %d", horizon_);
         RCLCPP_INFO(this->get_logger(), "  Control frequency: %.1f Hz", control_freq_);
         RCLCPP_INFO(this->get_logger(), "  Mode: %s", getModeString().c_str());
+        RCLCPP_INFO(this->get_logger(), "  Stance (L x W): %.3f x %.3f m",
+                    stance_length_, stance_width_);
+        RCLCPP_INFO(this->get_logger(), "  Nominal body height: %.3f m", nominal_body_height_);
+        RCLCPP_INFO(this->get_logger(), "  CoM offset: [%.3f, %.3f, %.3f] m",
+                    com_offset_.x(), com_offset_.y(), com_offset_.z());
     }
 
 private:
@@ -46,12 +51,24 @@ private:
         this->declare_parameter("control_frequency", 20.0);
         this->declare_parameter("enable_sliding_constraints", true);
         this->declare_parameter("mode", "hover");  // hover, walking, crossing
+        this->declare_parameter("default_stance_length", 0.40);
+        this->declare_parameter("default_stance_width", 0.30);
+        this->declare_parameter("nominal_body_height", 0.28);
+        this->declare_parameter("com_offset_x", 0.0);
+        this->declare_parameter("com_offset_y", 0.0);
+        this->declare_parameter("com_offset_z", 0.0);
         
         // 获取参数
         mass_ = this->get_parameter("mass").as_double();
         horizon_ = this->get_parameter("horizon").as_int();
         dt_ = this->get_parameter("dt").as_double();
         control_freq_ = this->get_parameter("control_frequency").as_double();
+        stance_length_ = this->get_parameter("default_stance_length").as_double();
+        stance_width_ = this->get_parameter("default_stance_width").as_double();
+        nominal_body_height_ = this->get_parameter("nominal_body_height").as_double();
+        com_offset_ << this->get_parameter("com_offset_x").as_double(),
+                       this->get_parameter("com_offset_y").as_double(),
+                       this->get_parameter("com_offset_z").as_double();
         
         std::string mode_str = this->get_parameter("mode").as_string();
         if (mode_str == "walking") {
@@ -96,12 +113,15 @@ private:
         gait_generator_ = std::make_unique<HybridGaitGenerator>();
         crossing_state_machine_ = std::make_unique<CrossingStateMachine>();
         
-        // 设置基础足端位置
+        // 设置基础足端位置（蜘蛛式站姿参数化）
+        const double half_length = 0.5 * stance_length_;
+        const double half_width = 0.5 * stance_width_;
         Eigen::MatrixXd base_foot_positions(4, 3);
-        base_foot_positions << -0.2, -0.15, -0.3,
-                               0.2, -0.15, -0.3,
-                               0.2,  0.15, -0.3,
-                              -0.2,  0.15, -0.3;
+        base_foot_positions << -half_length, -half_width, -nominal_body_height_,
+                                half_length, -half_width, -nominal_body_height_,
+                                half_length,  half_width, -nominal_body_height_,
+                               -half_length,  half_width, -nominal_body_height_;
+        base_foot_positions.rowwise() += com_offset_.transpose();
         mpc_controller_->setBaseFootPositions(base_foot_positions);
         
         // 初始化滑动副速度
@@ -345,6 +365,10 @@ private:
     int horizon_;
     double dt_;
     double control_freq_;
+    double stance_length_;
+    double stance_width_;
+    double nominal_body_height_;
+    Eigen::Vector3d com_offset_;
     
     // 控制器
     std::unique_ptr<MPCController> mpc_controller_;

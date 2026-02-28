@@ -15,14 +15,13 @@ Usage:
   ros2 launch dog2_visualization visualization_no_gazebo.launch.py mode:=walking
 """
 
-import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-from ament_index_python.packages import get_package_share_directory
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -39,14 +38,15 @@ def generate_launch_description():
         description='Launch RViz2'
     )
     
-    # Get package directories
-    dog2_viz_dir = get_package_share_directory('dog2_visualization')
-    panda_desc_dir = get_package_share_directory('panda_description')
-    
-    # Load URDF
-    urdf_file = os.path.join(panda_desc_dir, 'urdf', 'dog2.urdf')
-    with open(urdf_file, 'r') as f:
-        robot_description = f.read()
+    # Load robot description from the source of truth: dog2.urdf.xacro
+    xacro_file = PathJoinSubstitution([
+        FindPackageShare('dog2_description'),
+        'urdf', 'dog2.urdf.xacro'
+    ])
+    robot_description = ParameterValue(
+        Command(['xacro ', xacro_file]),
+        value_type=str
+    )
     
     # Robot State Publisher
     robot_state_publisher = Node(
@@ -65,13 +65,6 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='static_tf_world_odom',
         arguments=['0', '0', '0', '0', '0', '0', 'world', 'odom']
-    )
-    
-    # Joint State Publisher
-    joint_state_publisher = Node(
-        package='joint_state_publisher',
-        executable='joint_state_publisher',
-        name='joint_state_publisher'
     )
     
     # State Simulator (代替 Gazebo)
@@ -112,16 +105,10 @@ def generate_launch_description():
         }]
     )
     
-    # Visualization node (直接运行 Python 模块)
-    visualization_node = Node(
-        package='dog2_visualization',
-        executable='python3',
-        name='visualization_node',
+    # Visualization node
+    visualization_node = ExecuteProcess(
+        cmd=['python3', '-m', 'dog2_visualization.visualization_node'],
         output='screen',
-        arguments=['-m', 'dog2_visualization.visualization_node'],
-        parameters=[{
-            'update_rate': 20.0,
-        }]
     )
     
     # RViz2 configuration file
@@ -148,7 +135,6 @@ def generate_launch_description():
         # Nodes
         robot_state_publisher,
         static_tf_world_odom,
-        joint_state_publisher,
         state_simulator,
         mpc_node,
         wbc_node,

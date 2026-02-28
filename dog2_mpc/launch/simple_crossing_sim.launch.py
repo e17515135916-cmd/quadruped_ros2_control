@@ -8,31 +8,37 @@ Dog2 简化越障仿真启动文件
 import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, SetEnvironmentVariable
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
     # 参数
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
     
-    # 使用带Gazebo插件的URDF
-    panda_desc_pkg = get_package_share_directory('panda_description')
-    urdf_file = os.path.join(panda_desc_pkg, 'urdf', 'dog2_visual.urdf')
+    # 使用 dog2.urdf.xacro 作为唯一真源
+    xacro_file = PathJoinSubstitution([
+        FindPackageShare('dog2_description'),
+        'urdf', 'dog2.urdf.xacro'
+    ])
     
-    # 设置Gazebo模型路径（关键修复！）
-    panda_desc_src = os.path.join(os.getcwd(), 'src', 'panda_description')
+    # 设置Gazebo模型路径
+    dog2_desc_src = os.path.join(os.getcwd(), 'src', 'dog2_description')
     gazebo_model_path = SetEnvironmentVariable(
         'GAZEBO_MODEL_PATH',
-        panda_desc_src + ':' + os.environ.get('GAZEBO_MODEL_PATH', '')
+        dog2_desc_src + ':' + os.environ.get('GAZEBO_MODEL_PATH', '')
     )
     gazebo_resource_path = SetEnvironmentVariable(
         'GAZEBO_RESOURCE_PATH', 
-        panda_desc_src + ':' + os.environ.get('GAZEBO_RESOURCE_PATH', '')
+        dog2_desc_src + ':' + os.environ.get('GAZEBO_RESOURCE_PATH', '')
     )
-    
-    with open(urdf_file, 'r') as f:
-        robot_description = f.read()
+
+    robot_description = ParameterValue(
+        Command(['xacro ', xacro_file]),
+        value_type=str
+    )
     
     # 启动Gazebo
     gazebo = ExecuteProcess(

@@ -7,6 +7,12 @@ mpc_node:
     horizon: 20  # 预测时域
     dt: 0.05  # 时间步长 (s)
     control_frequency: 20.0  # 控制频率 (Hz)
+    default_stance_length: 0.40  # 蜘蛛式站姿长度 (m)
+    default_stance_width: 0.30   # 蜘蛛式站姿宽度 (m)
+    nominal_body_height: 0.28    # 机身离地高度 (m)
+    com_offset_x: 0.0            # CoM 偏置 X (m)
+    com_offset_y: 0.0            # CoM 偏置 Y (m)
+    com_offset_z: 0.0            # CoM 偏置 Z (m)
     
     # 约束开关
     enable_sliding_constraints: true
