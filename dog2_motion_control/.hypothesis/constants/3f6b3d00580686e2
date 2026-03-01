@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_nav_sat_fix.py
-# hypothesis_version: 6.150.2
-
-[-1.7976931348623157e+308, 1.7976931348623157e+308, 256, '%s(%s)', ')', ', ', '.', '=', 'Header', 'NavSatStatus', '[]', '_', '_altitude', '_header', '_latitude', '_longitude', '_position_covariance', '_status', 'altitude', 'array(', "array('X', ", 'double', 'double[9]', 'float', 'header', 'int16', 'int32', 'int64', 'int8', 'latitude', 'longitude', 'msg', 'position_covariance', 'sensor_msgs', 'status', 'std_msgs', 'std_msgs/Header', 'uint16', 'uint32', 'uint64', 'uint8']

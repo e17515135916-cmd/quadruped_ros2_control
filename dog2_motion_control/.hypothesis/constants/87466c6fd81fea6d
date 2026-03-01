@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_battery_state.py
-# hypothesis_version: 6.150.2
-
-[-3.402823466e+38, 3.402823466e+38, 256, '%s(%s)', ')', ', ', '.', '=', 'Header', '[]', '_', '_capacity', '_cell_temperature', '_cell_voltage', '_charge', '_current', '_design_capacity', '_header', '_location', '_percentage', '_power_supply_health', '_power_supply_status', '_present', '_serial_number', '_temperature', '_voltage', 'array(', "array('X', ", 'boolean', 'capacity', 'cell_temperature', 'cell_voltage', 'charge', 'current', 'design_capacity', 'double', 'f', 'float', 'header', 'int16', 'int32', 'int64', 'int8', 'location', 'msg', 'percentage', 'power_supply_health', 'power_supply_status', 'present', 'sensor_msgs', 'sequence<float>', 'serial_number', 'std_msgs', 'std_msgs/Header', 'string', 'temperature', 'uint16', 'uint32', 'uint64', 'uint8', 'voltage']

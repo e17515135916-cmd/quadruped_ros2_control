@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_compressed_image.py
-# hypothesis_version: 6.150.2
-
-[256, '%s(%s)', ')', ', ', '.', '=', 'B', 'Header', '[]', '_', '_data', '_format', '_header', 'array(', "array('X', ", 'data', 'double', 'float', 'format', 'header', 'int16', 'int32', 'int64', 'int8', 'msg', 'sensor_msgs', 'sequence<uint8>', 'std_msgs', 'std_msgs/Header', 'string', 'uint16', 'uint32', 'uint64', 'uint8']

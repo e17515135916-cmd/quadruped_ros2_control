@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/std_msgs/msg/_color_rgba.py
-# hypothesis_version: 6.150.2
-
-[-3.402823466e+38, 3.402823466e+38, '%s(%s)', ')', ', ', '.', '=', '[]', '_', '_a', '_b', '_g', '_r', 'a', 'array(', "array('X', ", 'b', 'double', 'float', 'g', 'int16', 'int32', 'int64', 'int8', 'r', 'std_msgs', 'uint16', 'uint32', 'uint64', 'uint8']

@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_point_cloud2.py
-# hypothesis_version: 6.150.2
-
-[256, 4294967296, '%s(%s)', ')', ', ', '.', '=', 'B', 'Header', 'PointField', '[]', '_', '_data', '_fields', '_header', '_height', '_is_bigendian', '_is_dense', '_point_step', '_row_step', '_width', 'array(', "array('X', ", 'boolean', 'data', 'double', 'fields', 'float', 'header', 'height', 'int16', 'int32', 'int64', 'int8', 'is_bigendian', 'is_dense', 'msg', 'point_step', 'row_step', 'sensor_msgs', 'sequence<uint8>', 'std_msgs', 'std_msgs/Header', 'uint16', 'uint32', 'uint64', 'uint8', 'width']

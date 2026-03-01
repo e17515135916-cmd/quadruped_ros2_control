@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/trajectory_msgs/msg/_joint_trajectory.py
-# hypothesis_version: 6.150.2
-
-['%s(%s)', ')', ', ', '.', '=', 'Header', 'JointTrajectoryPoint', '[]', '_', '_header', '_joint_names', '_points', 'array(', "array('X', ", 'double', 'float', 'header', 'int16', 'int32', 'int64', 'int8', 'joint_names', 'msg', 'points', 'sequence<string>', 'std_msgs', 'std_msgs/Header', 'trajectory_msgs', 'uint16', 'uint32', 'uint64', 'uint8']

@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_multi_dof_joint_state.py
-# hypothesis_version: 6.150.2
-
-['%s(%s)', ')', ', ', '.', '=', 'Header', 'Transform', 'Twist', 'Wrench', '[]', '_', '_header', '_joint_names', '_transforms', '_twist', '_wrench', 'array(', "array('X', ", 'double', 'float', 'geometry_msgs', 'header', 'int16', 'int32', 'int64', 'int8', 'joint_names', 'msg', 'sensor_msgs', 'sequence<string>', 'std_msgs', 'std_msgs/Header', 'transforms', 'twist', 'uint16', 'uint32', 'uint64', 'uint8', 'wrench']

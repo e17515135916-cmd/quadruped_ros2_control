@@ -1,4 +1,0 @@
-# file: /home/dell/aperfect/carbot_ws/src/dog2_motion_control/dog2_motion_control/spider_robot_controller.py
-# hypothesis_version: 6.150.2
-
-[0.0, 0.001, 0.02, 0.1, 0.9, 1.0, 3.0, '/cmd_vel', '/spider_debug_info', 'Debug mode DISABLED.', '__main__', 'body_height', 'cycle_time', 'duty_factor', 'foot_position', 'gait_config', 'gait_type', 'haa', 'haa_rad', 'hfe', 'hfe_rad', 'is_stable', 'is_stance', 'joint_positions', 'kfe', 'kfe_rad', 'legs', 'lf', 'lh', 'num_support_legs', 'omega', 'phase', 'rail', 'rail_m', 'rf', 'rh', 'stride_height', 'stride_length', 'support_legs', 'timestamp', 'velocity', 'vx', 'vy', 'x', 'y', 'z']

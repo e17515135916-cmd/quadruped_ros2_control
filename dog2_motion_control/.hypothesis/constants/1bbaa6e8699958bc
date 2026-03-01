@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/trajectory_msgs/msg/_joint_trajectory_point.py
-# hypothesis_version: 6.150.2
-
-[-1.7976931348623157e+308, 1.7976931348623157e+308, '%s(%s)', ')', ', ', '.', '=', 'Duration', '[]', '_', '_accelerations', '_effort', '_positions', '_time_from_start', '_velocities', 'accelerations', 'array(', "array('X', ", 'builtin_interfaces', 'd', 'double', 'effort', 'float', 'int16', 'int32', 'int64', 'int8', 'msg', 'positions', 'sequence<double>', 'time_from_start', 'trajectory_msgs', 'uint16', 'uint32', 'uint64', 'uint8', 'velocities']

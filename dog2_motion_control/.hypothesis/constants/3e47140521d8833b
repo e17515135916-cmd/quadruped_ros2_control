@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_fluid_pressure.py
-# hypothesis_version: 6.150.2
-
-[-1.7976931348623157e+308, 1.7976931348623157e+308, '%s(%s)', ')', ', ', '.', '=', 'Header', '[]', '_', '_fluid_pressure', '_header', '_variance', 'array(', "array('X', ", 'double', 'float', 'fluid_pressure', 'header', 'int16', 'int32', 'int64', 'int8', 'msg', 'sensor_msgs', 'std_msgs', 'std_msgs/Header', 'uint16', 'uint32', 'uint64', 'uint8', 'variance']

@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/geometry_msgs/msg/_twist_with_covariance_stamped.py
-# hypothesis_version: 6.150.2
-
-['%s(%s)', ')', ', ', '.', '=', 'Header', 'TwistWithCovariance', '[]', '_', '_header', '_twist', 'array(', "array('X', ", 'double', 'float', 'geometry_msgs', 'header', 'int16', 'int32', 'int64', 'int8', 'msg', 'std_msgs', 'std_msgs/Header', 'twist', 'uint16', 'uint32', 'uint64', 'uint8']

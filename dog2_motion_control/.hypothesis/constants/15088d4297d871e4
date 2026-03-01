@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_multi_echo_laser_scan.py
-# hypothesis_version: 6.150.2
-
-[-3.402823466e+38, 3.402823466e+38, '%s(%s)', ')', ', ', '.', '=', 'Header', 'LaserEcho', '[]', '_', '_angle_increment', '_angle_max', '_angle_min', '_header', '_intensities', '_range_max', '_range_min', '_ranges', '_scan_time', '_time_increment', 'angle_increment', 'angle_max', 'angle_min', 'array(', "array('X', ", 'double', 'float', 'header', 'int16', 'int32', 'int64', 'int8', 'intensities', 'msg', 'range_max', 'range_min', 'ranges', 'scan_time', 'sensor_msgs', 'std_msgs', 'std_msgs/Header', 'time_increment', 'uint16', 'uint32', 'uint64', 'uint8']

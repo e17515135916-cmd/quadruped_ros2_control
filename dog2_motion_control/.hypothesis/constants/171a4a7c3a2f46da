@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/geometry_msgs/msg/_pose_array.py
-# hypothesis_version: 6.150.2
-
-['%s(%s)', ')', ', ', '.', '=', 'Header', 'Pose', '[]', '_', '_header', '_poses', 'array(', "array('X', ", 'double', 'float', 'geometry_msgs', 'header', 'int16', 'int32', 'int64', 'int8', 'msg', 'poses', 'std_msgs', 'std_msgs/Header', 'uint16', 'uint32', 'uint64', 'uint8']

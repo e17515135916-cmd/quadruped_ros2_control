@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/geometry_msgs/msg/_inertia.py
-# hypothesis_version: 6.150.2
-
-[-1.7976931348623157e+308, 1.7976931348623157e+308, '%s(%s)', ')', ', ', '.', '=', 'Vector3', '[]', '_', '_com', '_ixx', '_ixy', '_ixz', '_iyy', '_iyz', '_izz', '_m', 'array(', "array('X', ", 'com', 'double', 'float', 'geometry_msgs', 'int16', 'int32', 'int64', 'int8', 'ixx', 'ixy', 'ixz', 'iyy', 'iyz', 'izz', 'm', 'msg', 'uint16', 'uint32', 'uint64', 'uint8']

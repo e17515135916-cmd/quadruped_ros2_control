@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/std_msgs/msg/_float32_multi_array.py
-# hypothesis_version: 6.150.2
-
-[-3.402823466e+38, 3.402823466e+38, '%s(%s)', ')', ', ', '.', '=', 'MultiArrayLayout', '[]', '_', '_data', '_layout', 'array(', "array('X', ", 'data', 'double', 'f', 'float', 'int16', 'int32', 'int64', 'int8', 'layout', 'msg', 'sequence<float>', 'std_msgs', 'uint16', 'uint32', 'uint64', 'uint8']

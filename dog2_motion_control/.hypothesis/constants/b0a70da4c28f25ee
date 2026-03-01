@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_time_reference.py
-# hypothesis_version: 6.150.2
-
-['%s(%s)', ')', ', ', '.', '=', 'Header', 'Time', '[]', '_', '_header', '_source', '_time_ref', 'array(', "array('X', ", 'builtin_interfaces', 'double', 'float', 'header', 'int16', 'int32', 'int64', 'int8', 'msg', 'sensor_msgs', 'source', 'std_msgs', 'std_msgs/Header', 'string', 'time_ref', 'uint16', 'uint32', 'uint64', 'uint8']

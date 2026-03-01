@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/geometry_msgs/msg/_transform_stamped.py
-# hypothesis_version: 6.150.2
-
-['%s(%s)', ')', ', ', '.', '=', 'Header', 'Transform', '[]', '_', '_child_frame_id', '_header', '_transform', 'array(', "array('X', ", 'child_frame_id', 'double', 'float', 'geometry_msgs', 'header', 'int16', 'int32', 'int64', 'int8', 'msg', 'std_msgs', 'std_msgs/Header', 'string', 'transform', 'uint16', 'uint32', 'uint64', 'uint8']

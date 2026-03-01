@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_point_cloud.py
-# hypothesis_version: 6.150.2
-
-['%s(%s)', ')', ', ', '.', '=', 'ChannelFloat32', 'Header', 'Point32', '[]', '_', '_channels', '_header', '_points', 'array(', "array('X', ", 'channels', 'double', 'float', 'geometry_msgs', 'header', 'int16', 'int32', 'int64', 'int8', 'msg', 'points', 'sensor_msgs', 'std_msgs', 'std_msgs/Header', 'uint16', 'uint32', 'uint64', 'uint8']

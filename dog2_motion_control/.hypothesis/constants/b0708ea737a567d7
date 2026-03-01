@@ -1,4 +1,0 @@
-# file: /home/dell/aperfect/carbot_ws/src/dog2_motion_control/dog2_motion_control/joint_names.py
-# hypothesis_version: 6.150.2
-
-['\n腿部1的关节：', '__main__', 'haa', 'hfe', 'j1', 'j2', 'j3', 'j4', 'kfe', 'lf', 'lh', 'rail', 'rf', 'rh', '所有关节名称（按顺序）：']

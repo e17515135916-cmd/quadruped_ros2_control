@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/std_msgs/msg/_multi_array_layout.py
-# hypothesis_version: 6.150.2
-
-[4294967296, '%s(%s)', ')', ', ', '.', '=', 'MultiArrayDimension', '[]', '_', '_data_offset', '_dim', 'array(', "array('X', ", 'data_offset', 'dim', 'double', 'float', 'int16', 'int32', 'int64', 'int8', 'msg', 'std_msgs', 'uint16', 'uint32', 'uint64', 'uint8']

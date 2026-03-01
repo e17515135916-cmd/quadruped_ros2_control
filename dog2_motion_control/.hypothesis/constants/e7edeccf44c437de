@@ -1,4 +1,0 @@
-# file: /home/dell/aperfect/carbot_ws/src/dog2_motion_control/dog2_motion_control/trajectory_planner.py
-# hypothesis_version: 6.150.2
-
-[0.0, 1e-05, 0.1, 1.0, 1.1, 2.0, 4.0, 6.0, 10.0, 15.0, 'haa', 'hfe', 'kfe', 'rail']

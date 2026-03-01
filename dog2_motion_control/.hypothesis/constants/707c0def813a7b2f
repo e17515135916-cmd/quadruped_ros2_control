@@ -1,4 +1,0 @@
-# file: /home/dell/aperfect/carbot_ws/src/dog2_motion_control/dog2_motion_control/kinematics_solver.py
-# hypothesis_version: 6.150.2
-
-[-1.0, -0.9, 0.0, 1.0, 'IK无解（目标位置超出工作空间）', '__main__', 'haa', 'hfe', 'kfe', 'lf', 'rail', '运动学求解器测试\n']

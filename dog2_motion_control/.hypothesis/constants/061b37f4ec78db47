@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/geometry_msgs/msg/_pose_with_covariance_stamped.py
-# hypothesis_version: 6.150.2
-
-['%s(%s)', ')', ', ', '.', '=', 'Header', 'PoseWithCovariance', '[]', '_', '_header', '_pose', 'array(', "array('X', ", 'double', 'float', 'geometry_msgs', 'header', 'int16', 'int32', 'int64', 'int8', 'msg', 'pose', 'std_msgs', 'std_msgs/Header', 'uint16', 'uint32', 'uint64', 'uint8']

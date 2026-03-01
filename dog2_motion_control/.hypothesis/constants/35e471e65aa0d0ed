@@ -1,4 +1,0 @@
-# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_camera_info.py
-# hypothesis_version: 6.150.2
-
-[-1.7976931348623157e+308, 1.7976931348623157e+308, 4294967296, '%s(%s)', ')', ', ', '.', '=', 'Header', 'RegionOfInterest', '[]', '_', '_binning_x', '_binning_y', '_d', '_distortion_model', '_header', '_height', '_k', '_p', '_r', '_roi', '_width', 'array(', "array('X', ", 'binning_x', 'binning_y', 'd', 'distortion_model', 'double', 'double[12]', 'double[9]', 'float', 'header', 'height', 'int16', 'int32', 'int64', 'int8', 'k', 'msg', 'p', 'r', 'roi', 'sensor_msgs', 'sequence<double>', 'std_msgs', 'std_msgs/Header', 'string', 'uint16', 'uint32', 'uint64', 'uint8', 'width']
