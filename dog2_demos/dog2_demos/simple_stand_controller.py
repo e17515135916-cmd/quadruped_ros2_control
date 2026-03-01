@@ -17,7 +17,6 @@ Dog2 简单站立控制器
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray
-import time
 
 
 class SimpleStandController(Node):
@@ -42,8 +41,8 @@ class SimpleStandController(Node):
         # 定时器：50Hz
         self.timer = self.create_timer(0.02, self.control_callback)
         
-        # 状态
-        self.start_time = time.time()
+        # 状态（使用 ROS 时钟以支持仿真时间）
+        self.start_time = self.get_clock().now()
         self.transition_duration = 3.0  # 3秒过渡时间
         
         # 目标站立姿态
@@ -63,7 +62,7 @@ class SimpleStandController(Node):
     
     def control_callback(self):
         """控制回调函数"""
-        elapsed = time.time() - self.start_time
+        elapsed = (self.get_clock().now() - self.start_time).nanoseconds * 1e-9
         
         # 创建消息
         msg = Float64MultiArray()

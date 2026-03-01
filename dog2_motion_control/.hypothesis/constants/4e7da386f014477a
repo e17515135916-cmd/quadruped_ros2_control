@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/geometry_msgs/msg/_point.py
+# hypothesis_version: 6.150.2
+
+[-1.7976931348623157e+308, 1.7976931348623157e+308, '%s(%s)', ')', ', ', '.', '=', '[]', '_', '_x', '_y', '_z', 'array(', "array('X', ", 'double', 'float', 'geometry_msgs', 'int16', 'int32', 'int64', 'int8', 'uint16', 'uint32', 'uint64', 'uint8', 'x', 'y', 'z']

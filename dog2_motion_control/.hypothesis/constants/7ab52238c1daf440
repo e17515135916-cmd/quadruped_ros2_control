@@ -1,0 +1,4 @@
+# file: /home/dell/aperfect/carbot_ws/src/dog2_motion_control/dog2_motion_control/config_loader.py
+# hypothesis_version: 6.150.2
+
+[-2.356, -1.57, -0.785, -0.05, 0.0, 0.05, 0.08, 0.15, 0.2, 0.5, 0.75, 0.785, 1.0, 1.57, 2.0, 10.0, 50.0, 1000, 'body_height', 'config', 'control', 'crawl', 'cycle_time', 'dog2_motion_control', 'duty_factor', 'frequency', 'gait', 'gait_params.yaml', 'gait_type', 'haa', 'hfe', 'joint_limits', 'kfe', 'max', 'max_joint_velocity', 'min', 'r', 'rail', 'stride_height', 'stride_length', 'trot', 'utf-8', 'walk']

@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/geometry_msgs/msg/_inertia_stamped.py
+# hypothesis_version: 6.150.2
+
+['%s(%s)', ')', ', ', '.', '=', 'Header', 'Inertia', '[]', '_', '_header', '_inertia', 'array(', "array('X', ", 'double', 'float', 'geometry_msgs', 'header', 'inertia', 'int16', 'int32', 'int64', 'int8', 'msg', 'std_msgs', 'std_msgs/Header', 'uint16', 'uint32', 'uint64', 'uint8']

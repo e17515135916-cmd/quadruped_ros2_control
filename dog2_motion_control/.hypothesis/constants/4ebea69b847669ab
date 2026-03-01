@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_laser_echo.py
+# hypothesis_version: 6.150.2
+
+[-3.402823466e+38, 3.402823466e+38, '%s(%s)', ')', ', ', '.', '=', '[]', '_', '_echoes', 'array(', "array('X', ", 'double', 'echoes', 'f', 'float', 'int16', 'int32', 'int64', 'int8', 'sensor_msgs', 'sequence<float>', 'uint16', 'uint32', 'uint64', 'uint8']

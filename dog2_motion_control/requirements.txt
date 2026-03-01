@@ -1,0 +1,5 @@
+# Python依赖项
+numpy>=1.20.0
+scipy>=1.7.0
+hypothesis>=6.0.0
+pytest>=7.0.0

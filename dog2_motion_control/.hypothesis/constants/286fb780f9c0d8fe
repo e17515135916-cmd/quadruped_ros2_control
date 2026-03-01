@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_region_of_interest.py
+# hypothesis_version: 6.150.2
+
+[4294967296, '%s(%s)', ')', ', ', '.', '=', '[]', '_', '_do_rectify', '_height', '_width', '_x_offset', '_y_offset', 'array(', "array('X', ", 'boolean', 'do_rectify', 'double', 'float', 'height', 'int16', 'int32', 'int64', 'int8', 'sensor_msgs', 'uint16', 'uint32', 'uint64', 'uint8', 'width', 'x_offset', 'y_offset']

@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/geometry_msgs/msg/_velocity_stamped.py
+# hypothesis_version: 6.150.2
+
+['%s(%s)', ')', ', ', '.', '=', 'Header', 'Twist', '[]', '_', '_body_frame_id', '_header', '_reference_frame_id', '_velocity', 'array(', "array('X', ", 'body_frame_id', 'double', 'float', 'geometry_msgs', 'geometry_msgs/Twist', 'header', 'int16', 'int32', 'int64', 'int8', 'msg', 'reference_frame_id', 'std_msgs', 'std_msgs/Header', 'string', 'uint16', 'uint32', 'uint64', 'uint8', 'velocity']

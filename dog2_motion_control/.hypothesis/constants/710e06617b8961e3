@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/rosidl_generator_py/generate_py_impl.py
+# hypothesis_version: 6.150.2
+
+['"', '"%s"', '%c', '%s', "'", "'%s'", '(%s)', ', ', ':', 'B', 'False', 'H', 'I', 'Q', 'True', '[%s]', '\\', "\\'", '\\\\', '_', '_%s.py', '_%s_s.c', '_%s_s.ep.{0}.c', '__init__.py', '_idl.py.em', '_idl_support.c.em', 'action feedback', 'action goal', 'action result', 'b', 'bool', 'boolean', 'bytes', 'char', 'content', 'd', 'double', 'dtype', 'f', 'float', 'h', 'i', 'idl_tuples', 'int', 'int16', 'int32', 'int64', 'int8', 'message', 'numpy.float32', 'numpy.float64', 'numpy.int16', 'numpy.int32', 'numpy.int64', 'numpy.int8', 'numpy.uint16', 'numpy.uint32', 'numpy.uint64', 'numpy.uint8', 'octet', 'output_dir', 'package_name', 'q', 'service request', 'service response', 'str', 'target_dependencies', 'template_dir', 'type_code', 'typesupport_impl', 'uint16', 'uint32', 'uint64', 'uint8', "unknown type '%s'", 'w']

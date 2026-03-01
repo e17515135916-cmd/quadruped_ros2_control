@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_point_field.py
+# hypothesis_version: 6.150.2
+
+[256, 4294967296, '%s(%s)', ')', ', ', '.', '=', 'FLOAT32', 'FLOAT64', 'INT16', 'INT32', 'INT8', 'UINT16', 'UINT32', 'UINT8', '[]', '_', '_count', '_datatype', '_name', '_offset', 'array(', "array('X', ", 'count', 'datatype', 'double', 'float', 'int16', 'int32', 'int64', 'int8', 'name', 'offset', 'sensor_msgs', 'string', 'uint16', 'uint32', 'uint64', 'uint8']

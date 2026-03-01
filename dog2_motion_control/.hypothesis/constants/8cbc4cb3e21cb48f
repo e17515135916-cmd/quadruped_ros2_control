@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_joy.py
+# hypothesis_version: 6.150.2
+
+[-3.402823466e+38, 3.402823466e+38, -2147483648, 2147483648, '%s(%s)', ')', ', ', '.', '=', 'Header', '[]', '_', '_axes', '_buttons', '_header', 'array(', "array('X', ", 'axes', 'buttons', 'double', 'f', 'float', 'header', 'i', 'int16', 'int32', 'int64', 'int8', 'msg', 'sensor_msgs', 'sensor_msgs.msg.Joy', 'sequence<float>', 'sequence<int32>', 'std_msgs', 'std_msgs/Header', 'uint16', 'uint32', 'uint64', 'uint8']

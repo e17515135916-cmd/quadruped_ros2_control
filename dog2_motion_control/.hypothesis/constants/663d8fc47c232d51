@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/geometry_msgs/msg/_wrench_stamped.py
+# hypothesis_version: 6.150.2
+
+['%s(%s)', ')', ', ', '.', '=', 'Header', 'Wrench', '[]', '_', '_header', '_wrench', 'array(', "array('X', ", 'double', 'float', 'geometry_msgs', 'geometry_msgs/Wrench', 'header', 'int16', 'int32', 'int64', 'int8', 'msg', 'std_msgs', 'std_msgs/Header', 'uint16', 'uint32', 'uint64', 'uint8', 'wrench']

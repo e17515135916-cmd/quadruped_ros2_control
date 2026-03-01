@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/geometry_msgs/msg/_twist_with_covariance.py
+# hypothesis_version: 6.150.2
+
+[-1.7976931348623157e+308, 1.7976931348623157e+308, '%s(%s)', ')', ', ', '.', '=', 'Twist', '[]', '_', '_covariance', '_twist', 'array(', "array('X', ", 'covariance', 'double', 'double[36]', 'float', 'geometry_msgs', 'geometry_msgs/Twist', 'int16', 'int32', 'int64', 'int8', 'msg', 'twist', 'uint16', 'uint32', 'uint64', 'uint8']

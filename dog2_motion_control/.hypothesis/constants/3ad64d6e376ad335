@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/std_msgs/msg/_int8.py
+# hypothesis_version: 6.150.2
+
+[-128, 128, '%s(%s)', ')', ', ', '.', '=', '[]', '_', '_data', 'array(', "array('X', ", 'data', 'double', 'float', 'int16', 'int32', 'int64', 'int8', 'std_msgs', 'std_msgs.msg.Int8', 'uint16', 'uint32', 'uint64', 'uint8']

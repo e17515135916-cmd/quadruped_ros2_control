@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/std_msgs/msg/_header.py
+# hypothesis_version: 6.150.2
+
+['%s(%s)', ')', ', ', '.', '=', 'Time', '[]', '_', '_frame_id', '_stamp', 'array(', "array('X', ", 'builtin_interfaces', 'double', 'float', 'frame_id', 'int16', 'int32', 'int64', 'int8', 'msg', 'stamp', 'std_msgs', 'std_msgs.msg.Header', 'string', 'uint16', 'uint32', 'uint64', 'uint8']

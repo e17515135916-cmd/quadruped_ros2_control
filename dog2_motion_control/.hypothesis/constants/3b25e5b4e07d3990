@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_imu.py
+# hypothesis_version: 6.150.2
+
+[-1.7976931348623157e+308, 1.7976931348623157e+308, '%s(%s)', ')', ', ', '.', '=', 'Header', 'Quaternion', 'Vector3', '[]', '_', '_angular_velocity', '_header', '_linear_acceleration', '_orientation', 'angular_velocity', 'array(', "array('X', ", 'double', 'double[9]', 'float', 'geometry_msgs', 'header', 'int16', 'int32', 'int64', 'int8', 'linear_acceleration', 'msg', 'orientation', 'sensor_msgs', 'sensor_msgs.msg.Imu', 'std_msgs', 'std_msgs/Header', 'uint16', 'uint32', 'uint64', 'uint8']

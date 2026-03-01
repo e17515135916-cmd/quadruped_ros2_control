@@ -213,17 +213,21 @@
   </xacro:macro>
 
   <!-- Leg instantiations -->
+  <!-- Leg 1: Front Left (lf) -->
   <xacro:leg prefix="lf" leg_num="1" xyz="1.1026 -0.80953 0.2649" rpy="1.5708 0 0" p_low="-0.111" p_up="0.0"
              thigh_xyz="${leg12_thigh_xyz}" shin_xyz="${leg12_shin_xyz}" slider_inertia_xyz="${l1_inertia_xyz}"/>
 
+  <!-- Leg 2: Front Right (rf) -->
   <xacro:leg prefix="rf" leg_num="2" xyz="1.3491 -0.80953 0.2649" rpy="1.5708 0 0" p_low="0.0" p_up="0.111"
              thigh_xyz="${leg12_thigh_xyz}" shin_xyz="${leg12_shin_xyz}" slider_inertia_xyz="${l2_inertia_xyz}"
              hip_xyz="0.016 0.0199 0.055"/>
 
+  <!-- Leg 3: Rear Left (lh) -->
   <xacro:leg prefix="lh" leg_num="3" xyz="1.3491 -0.68953 0.2649" rpy="1.5708 0 -3.1416" p_low="-0.111" p_up="0.0"
              thigh_xyz="${leg3_thigh_xyz}" shin_xyz="${leg3_shin_xyz}" slider_inertia_xyz="${l3_inertia_xyz}"
              hip_rpy="3.1416 0 1.5708" knee_xyz="-0.0233 -0.055 -0.0254"/>
 
+  <!-- Leg 4: Rear Right (rh) -->
   <xacro:leg prefix="rh" leg_num="4" xyz="1.1071 -0.68953 0.2649" rpy="1.5708 0 -3.1416" p_low="0.0" p_up="0.111"
              thigh_xyz="${leg4_thigh_xyz}" shin_xyz="${leg4_shin_xyz}" slider_inertia_xyz="${l4_inertia_xyz}"
              hip_rpy="3.1416 0 1.5708" hip_xyz="0.0116 0.0199 0.055" knee_xyz="-0.0233 -0.055 -0.0254"

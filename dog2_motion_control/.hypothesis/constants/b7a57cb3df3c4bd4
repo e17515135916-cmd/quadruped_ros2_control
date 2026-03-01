@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_joy_feedback.py
+# hypothesis_version: 6.150.2
+
+[-3.402823466e+38, 3.402823466e+38, 256, '%s(%s)', ')', ', ', '.', '=', 'TYPE_BUZZER', 'TYPE_LED', 'TYPE_RUMBLE', '[]', '_', '_id', '_intensity', '_type', 'array(', "array('X', ", 'double', 'float', 'id', 'int16', 'int32', 'int64', 'int8', 'intensity', 'sensor_msgs', 'type', 'uint16', 'uint32', 'uint64', 'uint8']

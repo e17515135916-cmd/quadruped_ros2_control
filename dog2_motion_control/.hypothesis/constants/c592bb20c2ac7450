@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/rosidl_cmake/__init__.py
+# hypothesis_version: 6.150.2
+
+['(.)([A-Z][a-z]+)', '([a-z0-9])([A-Z])', ':', 'TEMPLATE', '\\1_\\2', 'afterFile', 'afterInclude', 'beforeFile', 'beforeInclude', 'content', 'idl_tuples', 'interface_path', 'output_dir', 'package_name', 'r', 'target_dependencies', 'template_dir', 'utf-8', 'w']

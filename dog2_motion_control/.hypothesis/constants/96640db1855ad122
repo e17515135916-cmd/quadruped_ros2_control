@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_nav_sat_status.py
+# hypothesis_version: 6.150.2
+
+[-128, 128, 65536, '%s(%s)', ')', ', ', '.', '=', 'SERVICE_COMPASS', 'SERVICE_GALILEO', 'SERVICE_GLONASS', 'SERVICE_GPS', 'STATUS_FIX', 'STATUS_GBAS_FIX', 'STATUS_NO_FIX', 'STATUS_SBAS_FIX', '[]', '_', '_service', '_status', 'array(', "array('X', ", 'double', 'float', 'int16', 'int32', 'int64', 'int8', 'sensor_msgs', 'service', 'status', 'uint16', 'uint32', 'uint64', 'uint8']

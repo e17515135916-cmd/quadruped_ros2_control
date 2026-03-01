@@ -46,6 +46,9 @@ install(
   PROGRAMS
     scripts/auto_stand_node.py
     scripts/spider_joint_smoke_test.py
+    scripts/spider_keyboard_control.py
+    scripts/spider_ik_stand.py
+    scripts/spider_basic_motion_controller.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

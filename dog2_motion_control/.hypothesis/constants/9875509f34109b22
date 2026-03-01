@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/geometry_msgs/msg/_polygon_stamped.py
+# hypothesis_version: 6.150.2
+
+['%s(%s)', ')', ', ', '.', '=', 'Header', 'Polygon', '[]', '_', '_header', '_polygon', 'array(', "array('X', ", 'double', 'float', 'geometry_msgs', 'header', 'int16', 'int32', 'int64', 'int8', 'msg', 'polygon', 'std_msgs', 'std_msgs/Header', 'uint16', 'uint32', 'uint64', 'uint8']

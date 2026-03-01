@@ -1,0 +1,4 @@
+# file: /home/dell/aperfect/carbot_ws/src/dog2_motion_control/dog2_motion_control/joint_controller.py
+# hypothesis_version: 6.150.2
+
+[0.0, 0.0005, 0.1, 1.0, 1000000000.0, 10000000, 20000000, '/joint_states', 'j1', 'j2', 'j3', 'j4', 'm', 'position', 'rad', 'rail', 'velocity']

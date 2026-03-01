@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_channel_float32.py
+# hypothesis_version: 6.150.2
+
+[-3.402823466e+38, 3.402823466e+38, '%s(%s)', ')', ', ', '.', '=', '[]', '_', '_name', '_values', 'array(', "array('X', ", 'double', 'f', 'float', 'int16', 'int32', 'int64', 'int8', 'name', 'sensor_msgs', 'sequence<float>', 'string', 'uint16', 'uint32', 'uint64', 'uint8', 'values']
