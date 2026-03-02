@@ -31,7 +31,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 import xacro
 
 
@@ -118,7 +118,7 @@ def generate_launch_description():
             ],
             'on_exit_shutdown': 'true'
         }.items(),
-        condition=IfCondition(['not ', LaunchConfiguration('use_gui')])
+        condition=UnlessCondition(LaunchConfiguration('use_gui'))
     )
     
     # Robot State Publisher节点
