@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>dog2_demos</name>
+  <version>0.0.0</version>
+  <description>Demo scripts for Dog2 robot</description>
+  <maintainer email="dell@todo.todo">dell</maintainer>
+  <license>TODO: License declaration</license>
+
+  <test_dependency>ament_copyright</test_dependency>
+  <test_dependency>ament_flake8</test_dependency>
+  <test_dependency>ament_pep257</test_dependency>
+  <test_dependency>python3-pytest</test_dependency>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

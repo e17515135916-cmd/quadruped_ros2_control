@@ -1,0 +1,95 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded: ~
+      Splitter Ratio: 0.5
+  - Class: rviz_common/Views
+    Name: Views
+    Expanded:
+      - /Current View1
+  - Class: rviz_common/Tool Properties
+    Name: Tool Properties
+    Expanded:
+      - /2D Nav Goal1
+      - /2D Pose Estimate1
+Visualization Manager:
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+    - Class: rviz_default_plugins/SetInitialPose
+      Topic: /initialpose
+    - Class: rviz_default_plugins/SetGoal
+      Topic: /goal_pose
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Plane: XY
+      Plane Cell Count: 20
+      Color: 160; 160; 164
+      Enabled: true
+    
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Description Topic: /robot_description
+      Enabled: true
+      Visual Enabled: true
+      Collision Enabled: false
+    
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Frame Timeout: 15.0
+      Frames:
+        All Enabled: false
+        base_link:
+          Value: true
+      Show Axes: true
+      Show Names: true
+    
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Foot Forces
+      Topic: /dog2/visualization/foot_forces
+      Enabled: true
+    
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Contact Markers
+      Topic: /dog2/visualization/contact_markers
+      Enabled: true
+    
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Trajectory
+      Topic: /dog2/visualization/trajectory
+      Enabled: true
+  
+  Global Options:
+    Fixed Frame: odom
+    Background Color: 48; 48; 48
+  
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 3.0
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.06
+        Stereo Focal Distance: 1.0
+        Swap Stereo Eyes: false
+        Value: false
+      Focal Point:
+        X: 0.0
+        Y: 0.0
+        Z: 0.3
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.01
+      Pitch: 0.5
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz_default_plugins)
+      Yaw: 0.8
+    Saved: ~

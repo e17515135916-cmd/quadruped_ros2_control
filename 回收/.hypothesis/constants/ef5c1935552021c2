@@ -1,0 +1,4 @@
+# file: /home/dell/aperfect/carbot_ws/presentation_viz/logger.py
+# hypothesis_version: 6.150.2
+
+['%Y-%m-%d %H:%M:%S', 'presentation_viz']

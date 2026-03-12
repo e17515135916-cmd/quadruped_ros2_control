@@ -1,0 +1,41 @@
+mpc_node:
+  ros__parameters:
+    # 机器人参数
+    mass: 11.8  # kg
+    
+    # MPC参数
+    horizon: 20  # 预测时域
+    dt: 0.05  # 时间步长 (s)
+    control_frequency: 20.0  # 控制频率 (Hz)
+    default_stance_length: 0.40  # 蜘蛛式站姿长度 (m)
+    default_stance_width: 0.30   # 蜘蛛式站姿宽度 (m)
+    nominal_body_height: 0.28    # 机身离地高度 (m)
+    com_offset_x: 0.0            # CoM 偏置 X (m)
+    com_offset_y: 0.0            # CoM 偏置 Y (m)
+    com_offset_z: 0.0            # CoM 偏置 Z (m)
+    
+    # 约束开关
+    enable_sliding_constraints: true
+    enable_boundary_constraints: true
+    
+    # 状态权重 (Q矩阵对角元素)
+    # [x, y, z, roll, pitch, yaw, vx, vy, vz, wx, wy, wz]
+    Q_diag: [100.0, 100.0, 100.0,  # 位置
+             10.0, 10.0, 10.0,      # 姿态
+             10.0, 10.0, 10.0,      # 线速度
+             1.0, 1.0, 1.0]         # 角速度
+    
+    # 控制权重 (R矩阵对角元素)
+    # [f1x, f1y, f1z, f2x, f2y, f2z, f3x, f3y, f3z, f4x, f4y, f4z]
+    R_diag: [0.01, 0.01, 0.01,  # 腿1
+             0.01, 0.01, 0.01,  # 腿2
+             0.01, 0.01, 0.01,  # 腿3
+             0.01, 0.01, 0.01]  # 腿4
+    
+    # 控制输入约束
+    u_min: -100.0  # N
+    u_max: 100.0   # N
+    
+    # 参考轨迹
+    reference_height: 0.3  # m
+    reference_velocity: 0.0  # m/s

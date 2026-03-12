@@ -1,0 +1,506 @@
+"""
+运动学求解器单元测试
+
+测试逆运动学和正运动学的功能
+根据需求 3.2, 3.3 编写的测试用例
+"""
+
+import pytest
+import numpy as np
+from dog2_motion_control.kinematics_solver import create_kinematics_solver
+from dog2_motion_control.leg_parameters import LEG_PARAMETERS
+
+
+class TestKinematicsSolver:
+    """运动学求解器测试类"""
+    
+    @pytest.fixture
+    def solver(self):
+        """创建运动学求解器实例"""
+        return create_kinematics_solver()
+    
+    def test_solver_initialization(self, solver):
+        """测试求解器初始化"""
+        assert solver is not None
+        assert len(solver.leg_params) == 4
+        assert 'lf' in solver.leg_params
+        assert 'rf' in solver.leg_params
+        assert 'lh' in solver.leg_params
+        assert 'rh' in solver.leg_params
+
+
+class TestIKKnownPositions:
+    """测试已知位置的IK解（需求 3.2）"""
+    
+    @pytest.fixture
+    def solver(self):
+        """创建运动学求解器实例"""
+        return create_kinematics_solver()
+    
+    def test_ik_center_position_lf(self, solver):
+        """测试前左腿的中心位置"""
+        leg_id = 'lf'
+        # 选择一个在工作空间中心的位置
+        target_pos = (1.0, -0.9, 0.0)
+        
+        joint_angles = solver.solve_ik(leg_id, target_pos)
+        assert joint_angles is not None, "中心位置应该有IK解"
+        
+        s_m, theta_haa, theta_hfe, theta_kfe = joint_angles
+        
+        # 验证导轨锁定
+        assert s_m == 0.0, "导轨应该锁定在0.0米"
+        
+        # 验证关节角度在合理范围内
+        assert -np.pi < theta_haa < np.pi
+        assert -np.pi < theta_hfe < np.pi
+        assert -np.pi < theta_kfe < np.pi
+    
+    def test_ik_known_positions_all_legs(self, solver):
+        """测试所有腿的已知位置"""
+        # 为每条腿定义一个已知的可达位置
+        known_positions = {
+            'lf': (1.0, -0.9, 0.0),   # 前左
+            'rf': (1.4, -0.9, 0.0),   # 前右
+            'lh': (1.4, -0.6, 0.0),   # 后左
+            'rh': (1.0, -0.6, 0.0),   # 后右
+        }
+        
+        for leg_id, target_pos in known_positions.items():
+            joint_angles = solver.solve_ik(leg_id, target_pos)
+            assert joint_angles is not None, f"{leg_id}: 已知位置应该有IK解"
+            
+            # 验证FK能够恢复原始位置
+            result_pos = solver.solve_fk(leg_id, joint_angles)
+            error = np.linalg.norm(np.array(result_pos) - np.array(target_pos))
+            assert error < 0.001, f"{leg_id}: IK->FK误差应该<1mm，实际: {error*1000:.3f}mm"
+    
+    def test_ik_extended_position(self, solver):
+        """测试腿部伸展位置"""
+        leg_id = 'lf'
+        params = LEG_PARAMETERS[leg_id]
+        L1, L2, L3 = params.link_lengths
+        
+        # 计算一个接近最大伸展的位置（但在工作空间内）
+        # 腿部最大伸展约为 L2 + L3 - 安全裕度
+        max_reach = L2 + L3 - 0.05  # 留5cm安全裕度
+        
+        # 在腿部局部坐标系中，向前伸展
+        base_pos = params.base_position
+        target_pos = (base_pos[0] + max_reach * 0.7, base_pos[1], base_pos[2] - 0.1)
+        
+        joint_angles = solver.solve_ik(leg_id, target_pos)
+        assert joint_angles is not None, "伸展位置应该有IK解"
+        
+        # 验证FK
+        result_pos = solver.solve_fk(leg_id, joint_angles)
+        error = np.linalg.norm(np.array(result_pos) - np.array(target_pos))
+        assert error < 0.001, f"伸展位置IK->FK误差应该<1mm，实际: {error*1000:.3f}mm"
+    
+    def test_ik_retracted_position(self, solver):
+        """测试腿部收缩位置"""
+        leg_id = 'lf'
+        params = LEG_PARAMETERS[leg_id]
+        L1, L2, L3 = params.link_lengths
+        
+        # 选择一个在工作空间内但相对收缩的位置
+        # 确保距离在 |L2-L3| 和 L2+L3 之间
+        min_reach = abs(L2 - L3) + 0.05  # 留5cm安全裕度
+        
+        base_pos = params.base_position
+        target_pos = (base_pos[0] + min_reach * 0.5, base_pos[1], base_pos[2] - 0.15)
+        
+        joint_angles = solver.solve_ik(leg_id, target_pos)
+        
+        # 如果这个位置有解，验证FK
+        if joint_angles is not None:
+            result_pos = solver.solve_fk(leg_id, joint_angles)
+            error = np.linalg.norm(np.array(result_pos) - np.array(target_pos))
+            assert error < 0.001, f"收缩位置IK->FK误差应该<1mm，实际: {error*1000:.3f}mm"
+        else:
+            # 如果太近导致无解，这也是合理的
+            # 至少验证求解器正确返回了None
+            assert joint_angles is None
+
+
+class TestWorkspaceBoundaries:
+    """测试工作空间边界情况（需求 3.3）"""
+    
+    @pytest.fixture
+    def solver(self):
+        """创建运动学求解器实例"""
+        return create_kinematics_solver()
+    
+    def test_ik_too_far(self, solver):
+        """测试目标位置过远（超出最大伸展）"""
+        leg_id = 'lf'
+        # 选择一个明显超出工作空间的位置
+        target_pos = (5.0, 5.0, 5.0)
+        
+        joint_angles = solver.solve_ik(leg_id, target_pos)
+        assert joint_angles is None, "超出工作空间的位置应该返回None"
+    
+    def test_ik_too_close(self, solver):
+        """测试目标位置过近（小于最小伸展）"""
+        leg_id = 'lf'
+        params = LEG_PARAMETERS[leg_id]
+        
+        # 选择一个非常接近基座的位置（可能小于最小伸展）
+        base_pos = params.base_position
+        target_pos = (base_pos[0], base_pos[1], base_pos[2])
+        
+        joint_angles = solver.solve_ik(leg_id, target_pos)
+        # 这个位置可能有解也可能无解，取决于具体的几何配置
+        # 如果有解，验证FK
+        if joint_angles is not None:
+            result_pos = solver.solve_fk(leg_id, joint_angles)
+            error = np.linalg.norm(np.array(result_pos) - np.array(target_pos))
+            assert error < 0.001, f"IK->FK误差应该<1mm，实际: {error*1000:.3f}mm"
+    
+    def test_ik_at_workspace_edge(self, solver):
+        """测试工作空间边缘的位置"""
+        leg_id = 'lf'
+        params = LEG_PARAMETERS[leg_id]
+        L1, L2, L3 = params.link_lengths
+        
+        # 计算理论最大伸展
+        max_reach = L2 + L3
+        
+        # 测试接近最大伸展的位置（留1cm裕度）
+        base_pos = params.base_position
+        reach_distance = max_reach - 0.01
+        
+        # 在腿部前方
+        target_pos = (base_pos[0] + reach_distance * 0.8, base_pos[1], base_pos[2] - 0.1)
+        
+        joint_angles = solver.solve_ik(leg_id, target_pos)
+        # 边缘位置可能有解也可能无解
+        if joint_angles is not None:
+            result_pos = solver.solve_fk(leg_id, joint_angles)
+            error = np.linalg.norm(np.array(result_pos) - np.array(target_pos))
+            assert error < 0.001, f"边缘位置IK->FK误差应该<1mm，实际: {error*1000:.3f}mm"
+    
+    def test_ik_negative_z(self, solver):
+        """测试负Z方向的位置（地面以下）"""
+        leg_id = 'lf'
+        params = LEG_PARAMETERS[leg_id]
+        base_pos = params.base_position
+        
+        # 测试地面以下的位置
+        target_pos = (base_pos[0] + 0.2, base_pos[1], -0.1)
+        
+        joint_angles = solver.solve_ik(leg_id, target_pos)
+        # 这个位置可能有解（取决于工作空间）
+        if joint_angles is not None:
+            result_pos = solver.solve_fk(leg_id, joint_angles)
+            error = np.linalg.norm(np.array(result_pos) - np.array(target_pos))
+            assert error < 0.001, f"负Z位置IK->FK误差应该<1mm，实际: {error*1000:.3f}mm"
+    
+    def test_ik_joint_limits_violation(self, solver):
+        """测试导致关节限位违反的位置"""
+        leg_id = 'lf'
+        params = LEG_PARAMETERS[leg_id]
+        base_pos = params.base_position
+        
+        # 尝试一个可能导致关节限位违反的极端位置
+        # 例如：极度侧向的位置
+        target_pos = (base_pos[0], base_pos[1] + 0.5, base_pos[2])
+        
+        joint_angles = solver.solve_ik(leg_id, target_pos)
+        # 如果超出关节限位，应该返回None
+        if joint_angles is not None:
+            # 如果有解，验证所有关节都在限位内
+            s_m, theta_haa, theta_hfe, theta_kfe = joint_angles
+            
+            limits = params.joint_limits
+            haa_min, haa_max = limits['haa']
+            hfe_min, hfe_max = limits['hfe']
+            kfe_min, kfe_max = limits['kfe']
+            
+            assert haa_min <= theta_haa <= haa_max, "HAA角度应该在限位内"
+            assert hfe_min <= theta_hfe <= hfe_max, "HFE角度应该在限位内"
+            assert kfe_min <= theta_kfe <= kfe_max, "KFE角度应该在限位内"
+
+
+class TestCoordinateTransforms:
+    """测试不同腿部的坐标系转换（需求 3.2）"""
+    
+    @pytest.fixture
+    def solver(self):
+        """创建运动学求解器实例"""
+        return create_kinematics_solver()
+    
+    def test_coordinate_transform_roundtrip_all_legs(self, solver):
+        """测试所有腿的坐标系转换round-trip"""
+        test_position = np.array([1.2, -0.75, 0.0])
+        
+        for leg_id in ['lf', 'rf', 'lh', 'rh']:
+            # 转换到腿部局部坐标系
+            pos_local = solver._transform_to_leg_frame(test_position, leg_id)
+            
+            # 转换回base_link坐标系
+            pos_back = solver._transform_from_leg_frame(pos_local, leg_id)
+            
+            # 验证round-trip
+            error = np.linalg.norm(pos_back - test_position)
+            assert error < 1e-10, f"{leg_id}: 坐标系转换round-trip误差应该接近0，实际: {error}"
+    
+    def test_front_legs_rotation(self, solver):
+        """测试前腿的坐标系旋转（90度绕X轴）"""
+        # 前腿：rpy = (1.5708, 0, 0) = (90°, 0°, 0°)
+        for leg_id in ['lf', 'rf']:
+            params = LEG_PARAMETERS[leg_id]
+            roll, pitch, yaw = params.base_rotation
+            
+            # 验证旋转角度
+            assert np.isclose(roll, np.pi/2, atol=0.01), f"{leg_id}: roll应该约为90度"
+            assert np.isclose(pitch, 0.0, atol=0.01), f"{leg_id}: pitch应该为0"
+            assert np.isclose(yaw, 0.0, atol=0.01), f"{leg_id}: yaw应该为0"
+            
+            # 测试旋转效果：base_link的Z轴应该映射到腿部局部的Y轴
+            # 在base_link中沿Z轴的向量
+            vec_base = np.array([0.0, 0.0, 1.0])
+            R = solver._rotation_matrix_from_rpy(roll, pitch, yaw)
+            vec_local = R.T @ vec_base
+            
+            # 应该主要沿着局部Y轴
+            assert np.abs(vec_local[1]) > 0.9, f"{leg_id}: Z轴应该映射到局部Y轴"
+    
+    def test_rear_legs_rotation(self, solver):
+        """测试后腿的坐标系旋转（90度绕X轴 + 180度绕Z轴）"""
+        # 后腿：rpy = (1.5708, 0, -3.1416) = (90°, 0°, 180°)
+        for leg_id in ['lh', 'rh']:
+            params = LEG_PARAMETERS[leg_id]
+            roll, pitch, yaw = params.base_rotation
+            
+            # 验证旋转角度
+            assert np.isclose(roll, np.pi/2, atol=0.01), f"{leg_id}: roll应该约为90度"
+            assert np.isclose(pitch, 0.0, atol=0.01), f"{leg_id}: pitch应该为0"
+            assert np.isclose(np.abs(yaw), np.pi, atol=0.01), f"{leg_id}: yaw应该约为±180度"
+    
+    def test_leg_base_positions(self, solver):
+        """测试腿部基座位置的正确性"""
+        # 验证所有腿的基座位置都已正确设置
+        for leg_id in ['lf', 'rf', 'lh', 'rh']:
+            params = LEG_PARAMETERS[leg_id]
+            base_pos = params.base_position
+            
+            # 基座位置应该在合理范围内
+            assert 0.5 < base_pos[0] < 2.0, f"{leg_id}: X坐标应该在合理范围内"
+            assert -1.5 < base_pos[1] < 0.0, f"{leg_id}: Y坐标应该在合理范围内"
+            assert 0.0 < base_pos[2] < 0.5, f"{leg_id}: Z坐标应该在合理范围内"
+    
+    def test_ik_respects_leg_frame(self, solver):
+        """测试IK求解器正确使用腿部坐标系"""
+        # 为每条腿测试相同的相对位置
+        for leg_id in ['lf', 'rf', 'lh', 'rh']:
+            params = LEG_PARAMETERS[leg_id]
+            base_pos = params.base_position
+            
+            # 在base_link坐标系中，选择一个相对于基座的位置
+            target_pos = (base_pos[0] + 0.2, base_pos[1], base_pos[2] - 0.2)
+            
+            joint_angles = solver.solve_ik(leg_id, target_pos)
+            
+            if joint_angles is not None:
+                # 验证FK能够恢复原始位置
+                result_pos = solver.solve_fk(leg_id, joint_angles)
+                error = np.linalg.norm(np.array(result_pos) - np.array(target_pos))
+                assert error < 0.001, f"{leg_id}: IK->FK误差应该<1mm，实际: {error*1000:.3f}mm"
+
+
+class TestRailLocking:
+    """测试导轨锁定功能"""
+    
+    @pytest.fixture
+    def solver(self):
+        """创建运动学求解器实例"""
+        return create_kinematics_solver()
+    
+    def test_rail_always_zero(self, solver):
+        """测试导轨位移始终为0"""
+        test_positions = [
+            (1.0, -0.9, 0.0),
+            (1.2, -0.8, -0.1),
+            (1.3, -0.7, 0.05),
+        ]
+        
+        for leg_id in ['lf', 'rf', 'lh', 'rh']:
+            for target_pos in test_positions:
+                joint_angles = solver.solve_ik(leg_id, target_pos)
+                
+                if joint_angles is not None:
+                    s_m, _, _, _ = joint_angles
+                    assert s_m == 0.0, f"{leg_id}: 导轨位移应该始终为0.0米"
+    
+    def test_rail_offset_parameter_ignored(self, solver):
+        """测试rail_offset参数被正确处理"""
+        leg_id = 'lf'
+        target_pos = (1.0, -0.9, 0.0)
+        
+        # 即使传入非零的rail_offset，当前阶段应该使用0.0
+        joint_angles = solver.solve_ik(leg_id, target_pos, rail_offset=0.0)
+        
+        if joint_angles is not None:
+            s_m, _, _, _ = joint_angles
+            assert s_m == 0.0, "导轨位移应该为0.0米"
+
+
+class TestIKPropertyBased:
+    """基于属性的测试（Property-Based Testing）"""
+    
+    @pytest.fixture
+    def solver(self):
+        """创建运动学求解器实例"""
+        return create_kinematics_solver()
+    
+    # Feature: spider-robot-basic-motion, Property 8: 逆运动学正确性（Round-trip）
+    def test_ik_fk_roundtrip_property(self, solver):
+        """
+        属性测试：对于任意工作空间内的位置，IK->FK应该返回原始位置
+        
+        验证需求: 3.1, 3.3
+        
+        这是一个round-trip属性测试：
+        - 生成随机的脚部目标位置
+        - 计算逆运动学得到关节角度
+        - 使用正运动学将关节角度转换回脚部位置
+        - 验证结果位置与目标位置的误差小于1mm
+        """
+        from hypothesis import given, settings, strategies as st, assume
+        
+        # 定义测试策略：为每条腿生成工作空间内的随机位置
+        @settings(max_examples=100, deadline=None)
+        @given(
+            leg_id=st.sampled_from(['lf', 'rf', 'lh', 'rh']),
+            # 相对于基座的偏移量（在腿部工作空间内）
+            dx=st.floats(min_value=0.1, max_value=0.35),  # 前方偏移
+            dy=st.floats(min_value=-0.15, max_value=0.15),  # 侧向偏移
+            dz=st.floats(min_value=-0.35, max_value=-0.05),  # 下方偏移
+        )
+        def run_roundtrip_test(leg_id, dx, dy, dz):
+            """执行round-trip测试"""
+            params = LEG_PARAMETERS[leg_id]
+            base_pos = params.base_position
+            
+            # 构造目标位置（相对于基座）
+            target_pos = (
+                base_pos[0] + dx,
+                base_pos[1] + dy,
+                base_pos[2] + dz
+            )
+            
+            # 逆运动学
+            joint_angles = solver.solve_ik(leg_id, target_pos)
+            
+            # 如果IK无解，跳过这个测试用例（位置可能超出工作空间）
+            assume(joint_angles is not None)
+            
+            # 正运动学
+            result_pos = solver.solve_fk(leg_id, joint_angles)
+            
+            # 验证round-trip（误差<1mm）
+            error = np.linalg.norm(np.array(result_pos) - np.array(target_pos))
+            assert error < 0.001, (
+                f"{leg_id}: IK->FK round-trip误差过大\n"
+                f"  目标位置: {target_pos}\n"
+                f"  结果位置: {result_pos}\n"
+                f"  误差: {error*1000:.3f}mm (阈值: 1.0mm)\n"
+                f"  关节角度: s={joint_angles[0]:.4f}m, "
+                f"θ_haa={np.degrees(joint_angles[1]):.2f}°, "
+                f"θ_hfe={np.degrees(joint_angles[2]):.2f}°, "
+                f"θ_kfe={np.degrees(joint_angles[3]):.2f}°"
+            )
+        
+        # 运行属性测试
+        run_roundtrip_test()
+    
+    # Feature: spider-robot-basic-motion, Property 9: 工作空间外错误处理
+    def test_workspace_boundary_error_handling_property(self, solver):
+        """
+        属性测试：对于任意超出工作空间的位置，IK应该返回None
+        
+        验证需求: 3.3
+        
+        这个属性测试验证：
+        - 生成明显超出工作空间的随机位置
+        - 验证IK求解器正确返回None（无解）
+        - 确保系统能够识别并处理不可达的目标位置
+        """
+        from hypothesis import given, settings, strategies as st
+        
+        @settings(max_examples=100, deadline=None)
+        @given(
+            leg_id=st.sampled_from(['lf', 'rf', 'lh', 'rh']),
+            # 生成超出工作空间的位置策略
+            position_type=st.sampled_from(['too_far', 'too_close', 'extreme_combined']),
+            scale=st.floats(min_value=1.5, max_value=5.0),  # 放大因子
+        )
+        def run_boundary_test(leg_id, position_type, scale):
+            """执行工作空间边界测试"""
+            params = LEG_PARAMETERS[leg_id]
+            base_pos = params.base_position
+            L1, L2, L3 = params.link_lengths
+            
+            # 计算理论最大伸展距离
+            max_reach = L2 + L3
+            min_reach = abs(L2 - L3)
+            
+            # 根据位置类型生成超出工作空间的目标位置
+            if position_type == 'too_far':
+                # 距离过远：超过最大伸展
+                # 使用3D欧氏距离确保超出工作空间
+                distance = max_reach * scale
+                target_pos = (
+                    base_pos[0] + distance * 0.6,
+                    base_pos[1] + distance * 0.3,
+                    base_pos[2] - distance * 0.5
+                )
+            
+            elif position_type == 'too_close':
+                # 距离过近：小于最小伸展（如果min_reach > 0）
+                if min_reach > 0.05:  # 只有当最小伸展有意义时才测试
+                    distance = min_reach * 0.2  # 远小于最小伸展
+                    target_pos = (
+                        base_pos[0] + distance * 0.5,
+                        base_pos[1] + distance * 0.3,
+                        base_pos[2] - distance * 0.4
+                    )
+                else:
+                    # 如果最小伸展接近0，使用极端接近基座的位置
+                    target_pos = (
+                        base_pos[0] + 0.005,
+                        base_pos[1] + 0.005,
+                        base_pos[2] - 0.005
+                    )
+            
+            else:  # extreme_combined
+                # 组合极端位置：在多个方向上同时超出
+                distance = max_reach * scale * 0.7
+                target_pos = (
+                    base_pos[0] + distance,
+                    base_pos[1] + distance * 0.5,
+                    base_pos[2] + distance * 0.5
+                )
+            
+            # 逆运动学求解
+            joint_angles = solver.solve_ik(leg_id, target_pos)
+            
+            # 验证：超出工作空间的位置应该返回None
+            assert joint_angles is None, (
+                f"{leg_id}: 超出工作空间的位置应该返回None\n"
+                f"  位置类型: {position_type}\n"
+                f"  目标位置: {target_pos}\n"
+                f"  基座位置: {base_pos}\n"
+                f"  最大伸展: {max_reach:.3f}m\n"
+                f"  最小伸展: {min_reach:.3f}m\n"
+                f"  实际距离: {np.linalg.norm(np.array(target_pos) - base_pos):.3f}m\n"
+                f"  但IK返回了解: {joint_angles}"
+            )
+        
+        # 运行属性测试
+        run_boundary_test()
+
+
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

@@ -1,0 +1,4 @@
+# file: /opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/exceptions.py
+# hypothesis_version: 6.150.2
+
+['namespace', 'node name', 'service name', 'topic name']

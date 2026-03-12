@@ -1,0 +1,30 @@
+# 稳定步态参数配置文件
+# 
+# 此配置使用更慢、更稳定的步态，适用于狭窄空间或需要高稳定性的场景
+# 
+# 使用方法：
+# ros2 launch dog2_motion_control spider_gazebo_complete.launch.py \
+#   config_file:=$(ros2 pkg prefix dog2_motion_control)/share/dog2_motion_control/config/gait_params_stable.yaml
+
+gait:
+  stride_length: 0.05      # 非常小的步长
+  stride_height: 0.03      # 较小的步高，减少重心变化
+  cycle_time: 3.0          # 非常慢的周期（3秒）
+  duty_factor: 0.80        # 更高的支撑相占比（80%）
+  body_height: 0.18        # 稍低的身体高度，增加稳定性
+  gait_type: "crawl"
+
+control:
+  frequency: 50.0
+  max_joint_velocity: 1.5  # 限制关节速度
+  max_joint_acceleration: 3.0  # 限制加速度
+
+stability:
+  com_margin: 0.03         # 更大的稳定裕度
+  max_body_tilt: 0.175     # 更严格的倾斜限制（10度）
+  verify_support_triangle: true
+  min_support_legs: 3
+
+debug:
+  enabled: false
+  log_level: "INFO"
