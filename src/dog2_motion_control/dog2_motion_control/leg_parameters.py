@@ -68,12 +68,12 @@ def create_leg_parameters() -> Dict[str, LegParameters]:
     }
     
     # 腿部1：前左 (lf)
-    # URDF: xyz="1.1026 -0.80953 0.2649" rpy="1.5708 0 0"
+    # 配置坐标系基座位置（米）
     leg1_params = LegParameters(
         leg_id='lf',
         leg_num=1,
-        base_position=np.array([1.1026, -0.80953, 0.2649]),
-        base_rotation=np.array([1.5708, 0.0, 0.0]),  # 90度绕X轴
+        base_position=np.array([0.1246, 0.0625, 0.0]),
+        base_rotation=np.array([0.0, 0.0, 0.0]),  # 临时验证：强制对齐
         link_lengths=link_lengths,
         joint_limits={
             'rail': (-0.111, 0.0),  # 前左导轨向负方向移动
@@ -83,12 +83,11 @@ def create_leg_parameters() -> Dict[str, LegParameters]:
     )
     
     # 腿部2：前右 (rf)
-    # URDF: xyz="1.3491 -0.80953 0.2649" rpy="1.5708 0 0"
     leg2_params = LegParameters(
         leg_id='rf',
         leg_num=2,
-        base_position=np.array([1.3491, -0.80953, 0.2649]),
-        base_rotation=np.array([1.5708, 0.0, 0.0]),  # 90度绕X轴
+        base_position=np.array([0.1246, -0.0625, 0.0]),
+        base_rotation=np.array([0.0, 0.0, 0.0]),  # 基座坐标系对齐
         link_lengths=link_lengths,
         joint_limits={
             'rail': (0.0, 0.111),  # 前右导轨向正方向移动
@@ -98,12 +97,11 @@ def create_leg_parameters() -> Dict[str, LegParameters]:
     )
     
     # 腿部3：后左 (lh)
-    # URDF: xyz="1.3491 -0.68953 0.2649" rpy="1.5708 0 -3.1416"
     leg3_params = LegParameters(
         leg_id='lh',
         leg_num=3,
-        base_position=np.array([1.3491, -0.68953, 0.2649]),
-        base_rotation=np.array([1.5708, 0.0, -3.1416]),  # 90度绕X轴 + 180度绕Z轴
+        base_position=np.array([-0.1246, 0.0625, 0.0]),
+        base_rotation=np.array([0.0, 0.0, 0.0]),  # 临时验证：强制对齐
         link_lengths=link_lengths,
         joint_limits={
             'rail': (-0.111, 0.0),  # 后左导轨向负方向移动
@@ -113,12 +111,11 @@ def create_leg_parameters() -> Dict[str, LegParameters]:
     )
     
     # 腿部4：后右 (rh)
-    # URDF: xyz="1.1071 -0.68953 0.2649" rpy="1.5708 0 -3.1416"
     leg4_params = LegParameters(
         leg_id='rh',
         leg_num=4,
-        base_position=np.array([1.1071, -0.68953, 0.2649]),
-        base_rotation=np.array([1.5708, 0.0, -3.1416]),  # 90度绕X轴 + 180度绕Z轴
+        base_position=np.array([-0.1246, -0.0625, 0.0]),
+        base_rotation=np.array([0.0, 0.0, 3.1416]),  # 后腿绕Z轴翻转
         link_lengths=link_lengths,
         joint_limits={
             'rail': (0.0, 0.111),  # 后右导轨向正方向移动

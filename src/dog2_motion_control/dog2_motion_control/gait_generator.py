@@ -8,6 +8,7 @@ from typing import Tuple, List, Dict
 from dataclasses import dataclass
 import numpy as np
 import math
+from .leg_parameters import get_leg_parameters
 
 
 @dataclass
@@ -17,7 +18,7 @@ class GaitConfig:
     stride_height: float = 0.05     # 步高（米）
     cycle_time: float = 2.0         # 步态周期（秒）
     duty_factor: float = 0.75       # 支撑相占比
-    body_height: float = 0.2        # 身体高度（米）
+    body_height: float = 0.16       # 身体高度（米）
     gait_type: str = "crawl"        # 步态类型
 
 
@@ -97,10 +98,9 @@ class GaitGenerator:
         velocity_magnitude = math.sqrt(vx**2 + vy**2)
         
         # 步长与速度成正比（爬行步态步长较小）
-        self.config.stride_length = min(velocity_magnitude * self.config.cycle_time, 0.10)
+        self.config.stride_length = min(velocity_magnitude * self.config.cycle_time, 0.06)
         
-        # 爬行步态保持较低的步高以增加稳定性
-        self.config.stride_height = 0.05
+        # 允许从配置文件设置步高，不强制覆盖
         
         # 速度较快时可以适当缩短周期，但仍保持静态稳定
         if velocity_magnitude > 0.15:
@@ -171,10 +171,14 @@ class GaitGenerator:
         phase = self.get_phase(leg_id)
         is_stance = self.is_stance_phase(leg_id)
         
-        # 1. 绝对锚点：无论何时，步态都必须以此基准点为中心
-        nominal_pos = np.array([
-            0.3 if leg_id in ['lf', 'rf'] else -0.3,
-            0.2 if leg_id in ['rf', 'rh'] else -0.2,
+        # 1. 绝对锚点：蜘蛛式外展姿态（与新机械结构匹配）
+        leg_params = get_leg_parameters(leg_id)
+        x_offset = 0.02 if 'f' in leg_id else -0.02
+        y_offset = 0.1075 if 'l' in leg_id else -0.1075
+
+        nominal_pos = leg_params.base_position + np.array([
+            x_offset,
+            y_offset,
             -self.config.body_height
         ])
         
@@ -192,7 +196,7 @@ class GaitGenerator:
             # 水平轨迹：从基准点后方 (-0.5 步长) 迈到前方 (+0.5 步长)
             target_pos = nominal_pos + (swing_phase - 0.5) * stride_vector
             # 垂直轨迹：以基准高度为底的抛物线
-            height = max(self.config.stride_height, 0.05)
+            height = self.config.stride_height
             target_pos[2] = nominal_pos[2] + 4 * height * swing_phase * (1 - swing_phase)
         
         # 更新用于稳定性计算的记录，但不作为下次轨迹的数学依赖

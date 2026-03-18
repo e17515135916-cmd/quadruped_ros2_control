@@ -140,7 +140,7 @@ def generate_launch_description():
             '-name', 'dog2',
             '-x', '0.0',
             '-y', '0.0',
-            '-z', '0.5',  # 在地面上方0.5米生成，避免穿模
+            '-z', '0.3',  # 在地面上方0.3米生成，减少落地冲击
         ],
         output='screen'
     )
@@ -151,7 +151,7 @@ def generate_launch_description():
         executable='spawner',
         arguments=[
             'joint_state_broadcaster',
-            '-c', '/dog2_controller_manager',
+            '-c', '/controller_manager',
             '-t', 'joint_state_broadcaster/JointStateBroadcaster',
             '--param-file', controllers_yaml,
             '--controller-manager-timeout', '120',
@@ -165,14 +165,27 @@ def generate_launch_description():
         executable='spawner',
         arguments=[
             'joint_trajectory_controller',
-            '-c', '/dog2_controller_manager',
+            '-c', '/controller_manager',
             '-t', 'joint_trajectory_controller/JointTrajectoryController',
             '--param-file', controllers_yaml,
             '--controller-manager-timeout', '120',
         ],
         output='screen'
     )
-    
+
+    # 加载Rail Position Controller（控制4个导轨关节）
+    load_rail_position_controller = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=[
+            'rail_position_controller',
+            '-c', '/controller_manager',
+            '-t', 'joint_trajectory_controller/JointTrajectoryController',
+            '--param-file', controllers_yaml,
+            '--controller-manager-timeout', '120',
+        ],
+        output='screen'
+    )
 
     # 启动蜘蛛机器人运动控制节点
     spider_controller_node = Node(
@@ -182,7 +195,7 @@ def generate_launch_description():
         output='screen',
         parameters=[
             LaunchConfiguration('config_file'),
-            {'use_sim_time': True}  # 使用仿真时间
+            {'use_sim_time': False, 'debug_mode': True}
         ],
     )
 
@@ -200,10 +213,18 @@ def generate_launch_description():
         )
     )
 
-    # 轨迹控制器启动后再启动主控制节点
-    start_remaining_nodes = RegisterEventHandler(
+    # 轨迹控制器启动后再启动导轨控制器
+    start_rail_controller = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=load_joint_trajectory_controller,
+            on_exit=[load_rail_position_controller],
+        )
+    )
+
+    # 导轨控制器启动后再启动主控制节点
+    start_remaining_nodes = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=load_rail_position_controller,
             on_exit=[
                 spider_controller_node,
             ],
@@ -245,5 +266,6 @@ def generate_launch_description():
             )
         ),
         start_joint_trajectory,
+        start_rail_controller,
         start_remaining_nodes,
     ])

@@ -34,6 +34,14 @@
   <xacro:property name="leg4_thigh_xyz" value="-0.026 -0.0760041259902766 0.0649874821212069"/>
   <xacro:property name="leg4_shin_xyz" value="-0.0265089672547710 -0.1429895138560395 -0.0691152554666486"/>
 
+  <!-- World and base -->
+  <link name="base_footprint"/>
+
+  <joint name="base_offset_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="1.2272 -0.7470 0.0" rpy="0 0 3.14159265"/>
+  </joint>
 
   <link name="base_link">
     <inertial>
@@ -227,7 +235,7 @@
              thigh_rpy="0 3.1416 0" thigh_col_rpy="0 3.1416 0"/>
 
   <!-- ROS 2 Control -->
-  <ros2_control name="GazeboSystem" type="system">
+  <ros2_control name="GazeboSimSystem" type="system">
     <hardware>
       <plugin>gz_ros2_control/GazeboSimSystem</plugin>
     </hardware>
@@ -318,7 +326,7 @@
       <parameters>${controllers_yaml}</parameters>
       <robot_param>robot_description</robot_param>
       <robot_param_node>robot_state_publisher</robot_param_node>
-      <controller_manager_name>dog2_controller_manager</controller_manager_name>
+      <controller_manager_node_name>dog2_controller_manager</controller_manager_node_name>
     </plugin>
   </gazebo>
 

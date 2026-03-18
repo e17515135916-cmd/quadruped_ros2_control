@@ -3,11 +3,11 @@ spider_robot_controller:
   ros__parameters:
     # 蜘蛛机器人步态参数配置
     gait:
-      stride_length: 0.08
-      stride_height: 0.05
-      cycle_time: 2.0
+      stride_length: 0.02
+      stride_height: 0.01
+      cycle_time: 1.5
       duty_factor: 0.75
-      body_height: 0.2
+      body_height: 0.16
       gait_type: "crawl"
       leg_sequence: ["leg1", "leg3", "leg2", "leg4"]
       phase_offsets:
@@ -74,7 +74,7 @@ spider_robot_controller:
         rail_lock_effort: 1.0
     
     debug:
-      enabled: false
+      enabled: true
       publish_foot_trajectory: false
       publish_support_triangle: false
       publish_com_projection: false
@@ -83,6 +83,7 @@ spider_robot_controller:
         foot_trajectory_color: [1.0, 0.0, 0.0, 1.0]
         support_triangle_color: [0.0, 1.0, 0.0, 0.5]
         com_projection_color: [0.0, 0.0, 1.0, 1.0]
+    debug_mode: true
     
     leg_geometry:
       l0_rail_range: 0.05

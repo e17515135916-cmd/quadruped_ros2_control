@@ -142,14 +142,19 @@ class KinematicsSolver:
             # 导轨位移超出限位，返回无解
             return None
         
-        # 转换到腿部局部坐标系
+        # 将步态目标转换到腿部局部坐标系
         foot_pos_array = np.array(foot_pos)
         foot_pos_local = self._transform_to_leg_frame(foot_pos_array, leg_id)
-        px, py, pz = foot_pos_local  # 单位：米
-        
-        # 关键修复：减去导轨位移，得到相对于HAA关节的位置
+
+        # 4-DoF冗余降维：减去导轨位移，得到相对于HAA关节的位置
         # 导轨沿着腿部局部坐标系的X轴移动
-        px = px - s_m
+        foot_pos_local[0] = foot_pos_local[0] - s_m
+
+        # 提取局部坐标
+        px, py, pz = foot_pos_local  # 单位：米
+
+        # 坐标系修正：将向下的Z轴视为正
+        pz = -pz
         
         # 提取链长
         L1, L2, L3 = params.link_lengths

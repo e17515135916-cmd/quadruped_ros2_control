@@ -25,7 +25,7 @@ class ConfigLoader:
             'stride_height': 0.05,
             'cycle_time': 2.0,
             'duty_factor': 0.75,
-            'body_height': 0.2,
+            'body_height': 0.16,
             'gait_type': 'crawl'
         },
         'joint_limits': {
