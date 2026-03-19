@@ -60,6 +60,12 @@ def generate_launch_description():
         default_value='true',
         description='是否启动Gazebo GUI'
     )
+
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='true',
+        description='是否使用仿真时间'
+    )
     
     world_arg = DeclareLaunchArgument(
         'world',
@@ -128,7 +134,15 @@ def generate_launch_description():
         executable='robot_state_publisher',
         name='robot_state_publisher',
         output='screen',
-        parameters=[robot_description, {'use_sim_time': True}]
+        parameters=[robot_description, {'use_sim_time': LaunchConfiguration('use_sim_time')}]
+    )
+
+    # 显式桥接Gazebo时钟到ROS，避免控制节点出现“sim time not advancing”
+    clock_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
+        output='screen'
     )
     
     # 在Gazebo中生成机器人
@@ -140,20 +154,19 @@ def generate_launch_description():
             '-name', 'dog2',
             '-x', '0.0',
             '-y', '0.0',
-            '-z', '0.3',  # 在地面上方0.3米生成，减少落地冲击
+            '-z', '0.8',  # 在地面上方0.8米生成，减少落地冲击
         ],
         output='screen'
     )
     
-    # 加载Joint State Broadcaster
+    # 激活已在 controller_manager 参数中声明的控制器
+    # 这里不再重复传 -t/--param-file，避免“already loaded”与“name not exists”竞态
     load_joint_state_broadcaster = Node(
         package='controller_manager',
         executable='spawner',
         arguments=[
             'joint_state_broadcaster',
             '-c', '/controller_manager',
-            '-t', 'joint_state_broadcaster/JointStateBroadcaster',
-            '--param-file', controllers_yaml,
             '--controller-manager-timeout', '120',
         ],
         output='screen'
@@ -166,8 +179,6 @@ def generate_launch_description():
         arguments=[
             'joint_trajectory_controller',
             '-c', '/controller_manager',
-            '-t', 'joint_trajectory_controller/JointTrajectoryController',
-            '--param-file', controllers_yaml,
             '--controller-manager-timeout', '120',
         ],
         output='screen'
@@ -180,8 +191,6 @@ def generate_launch_description():
         arguments=[
             'rail_position_controller',
             '-c', '/controller_manager',
-            '-t', 'joint_trajectory_controller/JointTrajectoryController',
-            '--param-file', controllers_yaml,
             '--controller-manager-timeout', '120',
         ],
         output='screen'
@@ -195,7 +204,7 @@ def generate_launch_description():
         output='screen',
         parameters=[
             LaunchConfiguration('config_file'),
-            {'use_sim_time': False, 'debug_mode': True}
+            {'use_sim_time': LaunchConfiguration('use_sim_time'), 'debug_mode': True}
         ],
     )
 
@@ -241,6 +250,7 @@ def generate_launch_description():
         # 声明参数
         config_file_arg,
         use_gui_arg,
+        use_sim_time_arg,
         world_arg,
         
         # 设置环境变量
@@ -249,6 +259,9 @@ def generate_launch_description():
         # 启动Gazebo
         gazebo,
         gazebo_headless,
+
+        # 桥接仿真时钟
+        clock_bridge,
         
         # 启动Robot State Publisher
         robot_state_publisher,

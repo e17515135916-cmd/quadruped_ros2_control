@@ -27,21 +27,21 @@ joint_trajectory_controller:
   ros__parameters:
     joints:
       # Left Front leg (lf) - 3 revolute joints
-      - lf_haa_joint
-      - lf_hfe_joint
-      - lf_kfe_joint
+      - lf_coxa_joint
+      - lf_femur_joint
+      - lf_tibia_joint
       # Left Hind leg (lh) - 3 revolute joints
-      - lh_haa_joint
-      - lh_hfe_joint
-      - lh_kfe_joint
+      - lh_coxa_joint
+      - lh_femur_joint
+      - lh_tibia_joint
       # Right Hind leg (rh) - 3 revolute joints
-      - rh_haa_joint
-      - rh_hfe_joint
-      - rh_kfe_joint
+      - rh_coxa_joint
+      - rh_femur_joint
+      - rh_tibia_joint
       # Right Front leg (rf) - 3 revolute joints
-      - rf_haa_joint
-      - rf_hfe_joint
-      - rf_kfe_joint
+      - rf_coxa_joint
+      - rf_femur_joint
+      - rf_tibia_joint
 
     command_interfaces:
       - position
@@ -56,10 +56,10 @@ joint_trajectory_controller:
 rail_position_controller:
   ros__parameters:
     joints:
-      - j1
-      - j2
-      - j3
-      - j4
+      - lf_rail_joint
+      - lh_rail_joint
+      - rh_rail_joint
+      - rf_rail_joint
     command_interfaces:
       - position
     state_interfaces:

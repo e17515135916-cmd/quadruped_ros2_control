@@ -26,6 +26,26 @@
   <xacro:property name="prismatic_effort" value="100"/>
   <xacro:property name="prismatic_velocity" value="5"/>
 
+  <!-- Shared angle constants -->
+  <xacro:property name="PI_CONST" value="3.141592653589793"/>
+  <xacro:property name="half_pi" value="1.5707963267948966"/>
+
+  <!-- Joint passive dynamics (simulation stabilization) -->
+  <xacro:property name="prismatic_damping" value="0.25"/>
+  <xacro:property name="prismatic_friction" value="0.05"/>
+  <xacro:property name="hip_damping" value="0.12"/>
+  <xacro:property name="hip_friction" value="0.02"/>
+  <xacro:property name="knee_damping" value="0.15"/>
+  <xacro:property name="knee_friction" value="0.02"/>
+
+  <!-- Contact model (conservative baseline for stability) -->
+  <xacro:property name="foot_contact_mu1" value="1.0"/>
+  <xacro:property name="foot_contact_mu2" value="1.0"/>
+  <xacro:property name="foot_contact_kp" value="2.0e4"/>
+  <xacro:property name="foot_contact_kd" value="20.0"/>
+  <xacro:property name="foot_contact_min_depth" value="0.0005"/>
+  <xacro:property name="foot_contact_max_vel" value="0.2"/>
+
   <!-- Inertia properties -->
   <xacro:property name="leg12_thigh_xyz" value="0.026 -0.0760041259902766 0.0649874821212071"/>
   <xacro:property name="leg12_shin_xyz" value="0.0254901816398352 -0.143524743603395 -0.0694046953395906"/>
@@ -37,7 +57,26 @@
   <!-- World and base -->
   <link name="base_footprint"/>
 
-  <!-- URDF整体重定位：统一平移量 -->
+  <!--
+    CAD-origin compensation (global URDF shift)
+    ============================================================
+    WHY:
+      Source CAD/mesh was exported with a large global offset.
+
+    UNIQUE COMPENSATION LAYER (ENFORCED):
+      * urdf_shift is used ONLY in base_offset_joint.
+      * All other origins below are expressed directly in base_link-local
+        coordinates after compensation.
+
+    STRICT BOUNDARY:
+      * DO NOT apply this shift again in TF publishers, sensor extrinsics,
+        MPC/WBC kinematics, Python config, or controller code.
+      * Any second compensation will cause frame mismatch (double offset).
+
+    MAINTENANCE RULE:
+      If CAD is re-exported with corrected origin, update urdf_shift and
+      re-baseline base_link-local constants with validation script.
+  -->
   <xacro:property name="urdf_shift_x" value="0.9780"/>
   <xacro:property name="urdf_shift_y" value="-0.87203"/>
   <xacro:property name="urdf_shift_z" value="0.2649"/>
@@ -45,26 +84,26 @@
   <joint name="base_offset_joint" type="fixed">
     <parent link="base_footprint"/>
     <child link="base_link"/>
-    <origin xyz="${1.2272 - urdf_shift_x} ${-0.7470 - urdf_shift_y} ${0.0 - urdf_shift_z}" rpy="0 0 3.14159265"/>
+    <origin xyz="${1.2272 - urdf_shift_x} ${-0.7470 - urdf_shift_y} ${0.0 - urdf_shift_z}" rpy="0 0 ${PI_CONST}"/>
   </joint>
 
   <link name="base_link">
     <inertial>
-      <origin xyz="${1.2272 - urdf_shift_x} ${-0.7470 - urdf_shift_y} ${0.2649 - urdf_shift_z}" rpy="1.5708 0 0"/>
+      <origin xyz="0.2492 0.12503 0.0" rpy="${half_pi} 0 0"/>
       <mass value="6.0"/>
       <inertia ixx="0.0153" ixy="0.00011" ixz="0" iyy="0.052" iyz="0" izz="0.044"/>
     </inertial>
     <visual>
-      <origin xyz="${0.0 - urdf_shift_x} ${0.0 - urdf_shift_y} ${0.0 - urdf_shift_z}" rpy="0 0 0"/>
+      <origin xyz="-0.9780 0.87203 -0.2649" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://dog2_description/meshes/base_link.STL"/>
       </geometry>
-      <material name="">
+      <material name="mat_base_gray">
         <color rgba="0.752941176470588 0.752941176470588 0.752941176470588 1"/>
       </material>
     </visual>
     <collision>
-      <origin xyz="${0.0 - urdf_shift_x} ${0.0 - urdf_shift_y} ${0.0 - urdf_shift_z}" rpy="0 0 0"/>
+      <origin xyz="-0.9780 0.87203 -0.2649" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://dog2_description/meshes/base_link.STL"/>
       </geometry>
@@ -78,7 +117,7 @@
 
   <!-- Leg macro -->
   <xacro:macro name="leg" params="prefix leg_num xyz_x xyz_y xyz_z rpy p_low p_up thigh_xyz shin_xyz slider_inertia_xyz
-                                 hip_rpy:='0 0 1.5708' hip_xyz:='-0.016 0.0199 0.055'
+                                 hip_rpy:='0 0 ${half_pi}' hip_xyz:='-0.016 0.0199 0.055'
                                  knee_xyz:='-0.0233 -0.055 0.0274'
                                  thigh_rpy:='0 0 0' thigh_col_rpy:='0 0 0'">
 
@@ -92,7 +131,7 @@
       <geometry>
         <mesh filename="package://dog2_description/meshes/l${leg_num}.STL"/>
       </geometry>
-      <material name=""><color rgba="1 1 1 1"/></material>
+      <material name="mat_white"><color rgba="1 1 1 1"/></material>
     </visual>
     <collision>
       <geometry>
@@ -102,11 +141,12 @@
   </link>
 
   <joint name="${prefix}_rail_joint" type="prismatic">
-    <origin rpy="${rpy}" xyz="${xyz_x - urdf_shift_x} ${xyz_y - urdf_shift_y} ${xyz_z - urdf_shift_z}"/>
+    <origin rpy="${rpy}" xyz="${xyz_x} ${xyz_y} ${xyz_z}"/>
     <parent link="base_link"/>
     <child link="${prefix}_rail_link"/>
     <axis xyz="-1 0 0"/>
     <limit effort="${prismatic_effort}" lower="${p_low}" upper="${p_up}" velocity="${prismatic_velocity}"/>
+    <dynamics damping="${prismatic_damping}" friction="${prismatic_friction}"/>
   </joint>
 
   <link name="${prefix}_coxa_link">
@@ -119,7 +159,7 @@
       <geometry>
         <mesh filename="package://dog2_description/meshes/l${leg_num}1.STL"/>
       </geometry>
-      <material name=""><color rgba="0.266 0.529 1 1"/></material>
+      <material name="mat_blue"><color rgba="0.266 0.529 1 1"/></material>
     </visual>
     <collision>
       <geometry>
@@ -134,6 +174,7 @@
     <child link="${prefix}_coxa_link"/>
     <axis xyz="-1 0 0"/>
     <limit effort="${hip_effort}" lower="${hip_lower_limit}" upper="${hip_upper_limit}" velocity="${hip_velocity}"/>
+    <dynamics damping="${hip_damping}" friction="${hip_friction}"/>
   </joint>
 
   <link name="${prefix}_femur_link">
@@ -147,7 +188,7 @@
       <geometry>
         <mesh filename="package://dog2_description/meshes/l${leg_num}11.STL"/>
       </geometry>
-      <material name=""><color rgba="1 1 1 1"/></material>
+      <material name="mat_white"><color rgba="1 1 1 1"/></material>
     </visual>
     <collision>
       <origin rpy="${thigh_col_rpy}" xyz="0 0 0"/>
@@ -158,11 +199,12 @@
   </link>
 
   <joint name="${prefix}_femur_joint" type="revolute">
-    <origin rpy="1.5708 1.5708 0" xyz="${knee_xyz}"/>
+    <origin rpy="${half_pi} ${half_pi} 0" xyz="${knee_xyz}"/>
     <parent link="${prefix}_coxa_link"/>
     <child link="${prefix}_femur_link"/>
     <axis xyz="-1 0 0"/>
     <limit effort="${knee_effort}" lower="${knee_lower_limit}" upper="${knee_upper_limit}" velocity="${knee_velocity}"/>
+    <dynamics damping="${knee_damping}" friction="${knee_friction}"/>
   </joint>
 
   <link name="${prefix}_tibia_link">
@@ -175,7 +217,7 @@
       <geometry>
         <mesh filename="package://dog2_description/meshes/l${leg_num}111.STL"/>
       </geometry>
-      <material name=""><color rgba="1 1 1 1"/></material>
+      <material name="mat_white"><color rgba="1 1 1 1"/></material>
     </visual>
     <collision>
       <geometry>
@@ -190,40 +232,52 @@
     <child link="${prefix}_tibia_link"/>
     <axis xyz="-1 0 0"/>
     <limit effort="${knee_effort}" lower="${knee_lower_limit}" upper="${knee_upper_limit}" velocity="${knee_velocity}"/>
+    <dynamics damping="${knee_damping}" friction="${knee_friction}"/>
   </joint>
 
+  <!--
+    Contact is currently attached to tibia as foot proxy.
+    TODO: split dedicated foot link/contact surface when available.
+  -->
   <gazebo reference="${prefix}_tibia_link">
-    <mu1>1.0</mu1>
-    <mu2>1.0</mu2>
-    <kp>1000000.0</kp>
-    <kd>100.0</kd>
-    <minDepth>0.001</minDepth>
-    <maxVel>0.1</maxVel>
+    <mu1>${foot_contact_mu1}</mu1>
+    <mu2>${foot_contact_mu2}</mu2>
+    <kp>${foot_contact_kp}</kp>
+    <kd>${foot_contact_kd}</kd>
+    <minDepth>${foot_contact_min_depth}</minDepth>
+    <maxVel>${foot_contact_max_vel}</maxVel>
     <material>Gazebo/Grey</material>
   </gazebo>
 
   </xacro:macro>
 
   <!-- Leg instantiations -->
-  <!-- Leg 1: Front Left (lf) -->
-  <xacro:leg prefix="lf" leg_num="1" xyz_x="1.1026" xyz_y="-0.80953" xyz_z="0.2649" rpy="1.5708 0 0" p_low="-0.111" p_up="0.0"
+  <!--
+    Leg topology reminder (base_link-local):
+      - lf: left front  (左前)
+      - lh: left rear   (左后)
+      - rh: right rear  (右后)
+      - rf: right front (右前)
+  -->
+  <!-- Leg 1: Front Left (lf) base_link-local anchor -->
+  <xacro:leg prefix="lf" leg_num="1" xyz_x="0.1246" xyz_y="0.0625" xyz_z="0.0" rpy="${half_pi} 0 0" p_low="-0.111" p_up="0.0"
              thigh_xyz="${leg12_thigh_xyz}" shin_xyz="${leg12_shin_xyz}" slider_inertia_xyz="${l1_inertia_xyz}"/>
 
-  <!-- Leg 2: Rear Left (lh) -->
-  <xacro:leg prefix="lh" leg_num="2" xyz_x="1.3491" xyz_y="-0.80953" xyz_z="0.2649" rpy="1.5708 0 0" p_low="0.0" p_up="0.111"
+  <!-- Leg 2: Rear Left (lh) base_link-local anchor -->
+  <xacro:leg prefix="lh" leg_num="2" xyz_x="0.3711" xyz_y="0.0625" xyz_z="0.0" rpy="${half_pi} 0 0" p_low="0.0" p_up="0.111"
              thigh_xyz="${leg12_thigh_xyz}" shin_xyz="${leg12_shin_xyz}" slider_inertia_xyz="${l2_inertia_xyz}"
              hip_xyz="0.016 0.0199 0.055"/>
 
-  <!-- Leg 3: Rear Right (rh) -->
-  <xacro:leg prefix="rh" leg_num="3" xyz_x="1.3491" xyz_y="-0.68953" xyz_z="0.2649" rpy="1.5708 0 -3.1416" p_low="-0.111" p_up="0.0"
+  <!-- Leg 3: Rear Right (rh) base_link-local anchor -->
+  <xacro:leg prefix="rh" leg_num="3" xyz_x="0.3711" xyz_y="0.1825" xyz_z="0.0" rpy="${half_pi} 0 ${-pi}" p_low="-0.111" p_up="0.0"
              thigh_xyz="${leg3_thigh_xyz}" shin_xyz="${leg3_shin_xyz}" slider_inertia_xyz="${l3_inertia_xyz}"
-             hip_rpy="3.1416 0 1.5708" knee_xyz="-0.0233 -0.055 -0.0254"/>
+             hip_rpy="${pi} 0 ${half_pi}" knee_xyz="-0.0233 -0.055 -0.0254"/>
 
-  <!-- Leg 4: Front Right (rf) -->
-  <xacro:leg prefix="rf" leg_num="4" xyz_x="1.1071" xyz_y="-0.68953" xyz_z="0.2649" rpy="1.5708 0 -3.1416" p_low="0.0" p_up="0.111"
+  <!-- Leg 4: Front Right (rf) base_link-local anchor -->
+  <xacro:leg prefix="rf" leg_num="4" xyz_x="0.1291" xyz_y="0.1825" xyz_z="0.0" rpy="${half_pi} 0 ${-pi}" p_low="0.0" p_up="0.111"
              thigh_xyz="${leg4_thigh_xyz}" shin_xyz="${leg4_shin_xyz}" slider_inertia_xyz="${l4_inertia_xyz}"
-             hip_rpy="3.1416 0 1.5708" hip_xyz="0.0116 0.0199 0.055" knee_xyz="-0.0233 -0.055 -0.0254"
-             thigh_rpy="0 3.1416 0" thigh_col_rpy="0 3.1416 0"/>
+             hip_rpy="${pi} 0 ${half_pi}" hip_xyz="0.0116 0.0199 0.055" knee_xyz="-0.0233 -0.055 -0.0254"
+             thigh_rpy="0 ${pi} 0" thigh_col_rpy="0 ${pi} 0"/>
 
   <!-- ROS 2 Control -->
   <ros2_control name="GazeboSimSystem" type="system">
@@ -317,7 +371,6 @@
       <parameters>${controllers_yaml}</parameters>
       <robot_param>robot_description</robot_param>
       <robot_param_node>robot_state_publisher</robot_param_node>
-      <controller_manager_node_name>dog2_controller_manager</controller_manager_node_name>
     </plugin>
   </gazebo>
 

@@ -6,6 +6,7 @@
 
 from dataclasses import dataclass
 from typing import Dict, Tuple
+import math
 import numpy as np
 
 
@@ -62,17 +63,18 @@ def create_leg_parameters() -> Dict[str, LegParameters]:
     # 导轨：prismatic joint limits
     # 旋转关节：revolute joint limits（弧度）
     joint_limits_template = {
-        'haa': (-2.618, 2.618),  # HAA关节限位（约±150度）
-        'hfe': (-2.8, 2.8),      # HFE关节限位（约±160度）
-        'kfe': (-2.8, 2.8),      # KFE关节限位（约±160度）
+        'coxa': (-2.618, 2.618),   # coxa关节限位（约±150度）
+        'femur': (-2.8, 2.8),      # femur关节限位（约±160度）
+        'tibia': (-2.8, 2.8),      # tibia关节限位（约±160度）
     }
     
     # 腿部1：左前 (lf) -> leg1
+    # base_position 与 URDF leg anchor 保持一致（base_link-local）
     leg1_params = LegParameters(
         leg_id='lf',
         leg_num=1,
-        base_position=np.array([0.1535, 0.0725, 0.0]),
-        base_rotation=np.array([1.5708, 0.0, 0.0]),
+        base_position=np.array([0.1246, 0.0625, 0.0]),
+        base_rotation=np.array([math.pi / 2, 0.0, 0.0]),
         link_lengths=link_lengths,
         joint_limits={
             'rail': (-0.111, 0.0),  # 前左导轨向负方向移动
@@ -82,39 +84,42 @@ def create_leg_parameters() -> Dict[str, LegParameters]:
     )
 
     # 腿部2：左后 (lh) -> leg2
+    # base_position 与 URDF leg anchor 保持一致（base_link-local）
     leg2_params = LegParameters(
         leg_id='lh',
         leg_num=2,
-        base_position=np.array([-0.1535, 0.0725, 0.0]),
-        base_rotation=np.array([1.5708, 0.0, -3.1416]),
+        base_position=np.array([0.3711, 0.0625, 0.0]),
+        base_rotation=np.array([math.pi / 2, 0.0, 0.0]),
         link_lengths=link_lengths,
         joint_limits={
-            'rail': (-0.111, 0.0),  # 后左导轨向负方向移动
+            'rail': (0.0, 0.111),  # 后左导轨向正方向移动
             **joint_limits_template
         },
         rail_locked=True
     )
 
     # 腿部3：右后 (rh) -> leg3
+    # base_position 与 URDF leg anchor 保持一致（base_link-local）
     leg3_params = LegParameters(
         leg_id='rh',
         leg_num=3,
-        base_position=np.array([-0.1535, -0.0725, 0.0]),
-        base_rotation=np.array([1.5708, 0.0, -3.1416]),
+        base_position=np.array([0.3711, 0.1825, 0.0]),
+        base_rotation=np.array([math.pi / 2, 0.0, -math.pi]),
         link_lengths=link_lengths,
         joint_limits={
-            'rail': (0.0, 0.111),  # 后右导轨向正方向移动
+            'rail': (-0.111, 0.0),  # 后右导轨向负方向移动
             **joint_limits_template
         },
         rail_locked=True
     )
 
     # 腿部4：右前 (rf) -> leg4
+    # base_position 与 URDF leg anchor 保持一致（base_link-local）
     leg4_params = LegParameters(
         leg_id='rf',
         leg_num=4,
-        base_position=np.array([0.1535, -0.0725, 0.0]),
-        base_rotation=np.array([1.5708, 0.0, 0.0]),
+        base_position=np.array([0.1291, 0.1825, 0.0]),
+        base_rotation=np.array([math.pi / 2, 0.0, -math.pi]),
         link_lengths=link_lengths,
         joint_limits={
             'rail': (0.0, 0.111),  # 前右导轨向正方向移动

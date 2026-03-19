@@ -5,6 +5,7 @@ Joint Controller - 关节控制器
 """
 
 from typing import Dict, Optional, Tuple
+import time
 import rclpy
 from rclpy.node import Node
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
@@ -71,6 +72,7 @@ class JointController:
         
         # 连接状态监控
         self.last_joint_state_time = node.get_clock().now()
+        self.last_joint_state_wall_time = time.monotonic()
         self.CONNECTION_TIMEOUT_SEC = 3.0  # 3秒无数据则判定为连接丢失（Gazebo仿真下更稳）
         self.is_connected = False  # 初始状态为未连接
         self.reconnect_attempts = 0
@@ -140,6 +142,7 @@ class JointController:
         """
         # 更新连接状态
         self.last_joint_state_time = self.node.get_clock().now()
+        self.last_joint_state_wall_time = time.monotonic()
         
         if not self.is_connected:
             self.is_connected = True
@@ -165,9 +168,9 @@ class JointController:
                             - 旋转关节：位置单位为弧度（rad）
         
         关节命名规则（与URDF一致）：
-            - 导轨：j1, j2, j3, j4
+            - 导轨：{prefix}_rail_joint
             - 旋转关节：{prefix}_haa_joint, {prefix}_hfe_joint, {prefix}_kfe_joint
-            - prefix: lf（前左leg1），rf（前右leg2），lh（后左leg3），rh（后右leg4）
+            - prefix: lf（前左leg1）, lh（后左leg2）, rh（后右leg3）, rf（前右leg4）
         
         需求: 1.2, 1.3
         """
@@ -475,8 +478,9 @@ class JointController:
         
         需求: 8.1
         """
-        current_time = self.node.get_clock().now()
-        time_since_last_update = (current_time - self.last_joint_state_time).nanoseconds / 1e9
+        # 当use_sim_time且仿真尚未推进时，ROS时钟可能不前进，
+        # 这里使用wall time进行连接超时判断，避免“假断连”。
+        time_since_last_update = time.monotonic() - self.last_joint_state_wall_time
         
         if time_since_last_update > self.CONNECTION_TIMEOUT_SEC:
             if self.is_connected:

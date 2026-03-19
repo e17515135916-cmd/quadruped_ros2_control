@@ -23,10 +23,16 @@ PREFIX_TO_LEG_MAP: Dict[str, int] = {
 }
 
 # 导轨关节名称（prismatic joints）
-RAIL_JOINTS: List[str] = ['j1', 'j2', 'j3', 'j4']
+# 顺序按 leg_num=1..4: lf, lh, rh, rf
+RAIL_JOINTS: List[str] = [
+    'lf_rail_joint',
+    'lh_rail_joint',
+    'rh_rail_joint',
+    'rf_rail_joint',
+]
 
-# 旋转关节类型
-REVOLUTE_JOINT_TYPES: List[str] = ['haa', 'hfe', 'kfe']
+# 旋转关节类型（与URDF一致）
+REVOLUTE_JOINT_TYPES: List[str] = ['coxa', 'femur', 'tibia']
 
 
 def get_rail_joint_name(leg_num: int) -> str:
@@ -36,11 +42,13 @@ def get_rail_joint_name(leg_num: int) -> str:
         leg_num: 腿部编号 (1-4)
     
     Returns:
-        导轨关节名称，如 'j1'
+        导轨关节名称，如 'lf_rail_joint'
     """
     if leg_num not in [1, 2, 3, 4]:
         raise ValueError(f"Invalid leg number: {leg_num}. Must be 1-4.")
-    return f'j{leg_num}'
+    # leg_num 映射: 1->lf, 2->lh, 3->rh, 4->rf
+    prefix = LEG_PREFIX_MAP[leg_num]
+    return f'{prefix}_rail_joint'
 
 
 def get_revolute_joint_name(leg_num: int, joint_type: str) -> str:
@@ -48,10 +56,10 @@ def get_revolute_joint_name(leg_num: int, joint_type: str) -> str:
     
     Args:
         leg_num: 腿部编号 (1-4)
-        joint_type: 关节类型 ('haa', 'hfe', 'kfe')
+        joint_type: 关节类型 ('coxa', 'femur', 'tibia')
     
     Returns:
-        旋转关节名称，如 'lf_haa_joint'
+        旋转关节名称，如 'lf_coxa_joint'
     """
     if leg_num not in LEG_PREFIX_MAP:
         raise ValueError(f"Invalid leg number: {leg_num}. Must be 1-4.")
@@ -67,10 +75,10 @@ def get_all_joint_names() -> List[str]:
     
     Returns:
         关节名称列表，顺序为：
-        j1, lf_haa_joint, lf_hfe_joint, lf_kfe_joint,
-        j2, lh_haa_joint, lh_hfe_joint, lh_kfe_joint,
-        j3, rh_haa_joint, rh_hfe_joint, rh_kfe_joint,
-        j4, rf_haa_joint, rf_hfe_joint, rf_kfe_joint
+        lf_rail_joint, lf_coxa_joint, lf_femur_joint, lf_tibia_joint,
+        lh_rail_joint, lh_coxa_joint, lh_femur_joint, lh_tibia_joint,
+        rh_rail_joint, rh_coxa_joint, rh_femur_joint, rh_tibia_joint,
+        rf_rail_joint, rf_coxa_joint, rf_femur_joint, rf_tibia_joint
     """
     joint_names = []
     for leg_num in [1, 2, 3, 4]:
@@ -91,17 +99,17 @@ def get_leg_joint_names(leg_num: int) -> Dict[str, str]:
     Returns:
         字典，键为关节类型，值为关节名称
         例如：{
-            'rail': 'j1',
-            'haa': 'lf_haa_joint',
-            'hfe': 'lf_hfe_joint',
-            'kfe': 'lf_kfe_joint'
+            'rail': 'lf_rail_joint',
+            'coxa': 'lf_coxa_joint',
+            'femur': 'lf_femur_joint',
+            'tibia': 'lf_tibia_joint'
         }
     """
     return {
         'rail': get_rail_joint_name(leg_num),
-        'haa': get_revolute_joint_name(leg_num, 'haa'),
-        'hfe': get_revolute_joint_name(leg_num, 'hfe'),
-        'kfe': get_revolute_joint_name(leg_num, 'kfe'),
+        'coxa': get_revolute_joint_name(leg_num, 'coxa'),
+        'femur': get_revolute_joint_name(leg_num, 'femur'),
+        'tibia': get_revolute_joint_name(leg_num, 'tibia'),
     }
 
 

@@ -90,6 +90,7 @@ class SpiderRobotController(Node):
         self.initial_joint_positions = {}  # 从 /joint_states 读取的初始关节状态
         self.target_standing_pose = {}
         self.stuck_detection_start_time = None
+        self._clock_wait_logged = False
         
         # 紧急安全姿态相关
         self.is_emergency_mode = False  # 是否处于紧急模式
@@ -205,9 +206,9 @@ class SpiderRobotController(Node):
             leg_num = PREFIX_TO_LEG_MAP[leg_id]
             joint_names = get_leg_joint_names(leg_num)
             self.target_standing_pose[joint_names['rail']] = initial_rail
-            self.target_standing_pose[joint_names['haa']] = initial_haa
-            self.target_standing_pose[joint_names['hfe']] = initial_hfe
-            self.target_standing_pose[joint_names['kfe']] = initial_kfe
+            self.target_standing_pose[joint_names['coxa']] = initial_haa
+            self.target_standing_pose[joint_names['femur']] = initial_hfe
+            self.target_standing_pose[joint_names['tibia']] = initial_kfe
 
         # 读取当前真实关节状态作为插值起点（仅旋转关节）；
         # 导轨由 JointController 内部强制锁定为 0.0，不参与起立插值
@@ -222,14 +223,16 @@ class SpiderRobotController(Node):
                 self.initial_joint_positions[joint_name] = target_value
 
         # 进入平滑起立状态
-        # 如果仿真时钟未推进，直接进入就绪状态避免卡死
-        if self.get_clock().now().nanoseconds == 0:
-            self.current_state = ControllerState.READY_FOR_MPC
-            self.get_logger().warn('Sim time not advancing; skipping stand-up trajectory')
-            self.stuck_detection_start_time = self.get_clock().now()
+        # 如果仿真时钟尚未推进，不要跳过起立流程；保持在STANDING_UP并等待/clock就绪
+        now = self.get_clock().now()
+        if now.nanoseconds == 0:
+            self.current_state = ControllerState.STANDING_UP
+            self.standup_start_time = None  # 等待仿真时钟开始后再初始化起立起点
+            self.stuck_detection_start_time = None
+            self.get_logger().info('Waiting for Gazebo sim clock (/clock) to start...')
         else:
             self.current_state = ControllerState.STANDING_UP
-            self.standup_start_time = self.get_clock().now()
+            self.standup_start_time = now
             self.stuck_detection_start_time = self.standup_start_time
             self.get_logger().info(f'Starting smooth stand-up trajectory ({self.standup_duration:.1f}s)')
     
@@ -372,9 +375,9 @@ class SpiderRobotController(Node):
             
             # 收集关节命令
             target_joint_positions[joint_names['rail']] = s_m  # 导轨始终为0.0
-            target_joint_positions[joint_names['haa']] = haa_rad
-            target_joint_positions[joint_names['hfe']] = hfe_rad
-            target_joint_positions[joint_names['kfe']] = kfe_rad
+            target_joint_positions[joint_names['coxa']] = haa_rad
+            target_joint_positions[joint_names['femur']] = hfe_rad
+            target_joint_positions[joint_names['tibia']] = kfe_rad
         
         # 发送关节命令
         self.joint_controller.send_joint_commands(target_joint_positions)
@@ -530,9 +533,9 @@ class SpiderRobotController(Node):
                         f"No last valid config for {leg_id}, using standing pose"
                     )
                     s_m = self.target_standing_pose.get(joint_names['rail'], 0.0)
-                    haa_rad = self.target_standing_pose.get(joint_names['haa'], 0.0)
-                    hfe_rad = self.target_standing_pose.get(joint_names['hfe'], 0.0)
-                    kfe_rad = self.target_standing_pose.get(joint_names['kfe'], 0.0)
+                    haa_rad = self.target_standing_pose.get(joint_names['coxa'], 0.0)
+                    hfe_rad = self.target_standing_pose.get(joint_names['femur'], 0.0)
+                    kfe_rad = self.target_standing_pose.get(joint_names['tibia'], 0.0)
             else:
                 # IK成功：保存为有效配置
                 s_m, haa_rad, hfe_rad, kfe_rad = ik_result
@@ -551,9 +554,9 @@ class SpiderRobotController(Node):
                 final_kfe = -final_kfe
 
             target_joint_positions[joint_names['rail']] = s_m
-            target_joint_positions[joint_names['haa']] = final_haa
-            target_joint_positions[joint_names['hfe']] = final_hfe
-            target_joint_positions[joint_names['kfe']] = final_kfe
+            target_joint_positions[joint_names['coxa']] = final_haa
+            target_joint_positions[joint_names['femur']] = final_hfe
+            target_joint_positions[joint_names['tibia']] = final_kfe
         
         # 步骤 5：通过硬件接口层将 16 通道指令打包发送
         self.joint_controller.send_joint_commands(target_joint_positions)
@@ -569,10 +572,23 @@ class SpiderRobotController(Node):
             True: 起立完成
             False: 起立进行中
         """
-        if self.standup_start_time is None:
-            self.standup_start_time = self.get_clock().now()
+        now = self.get_clock().now()
 
-        elapsed = (self.get_clock().now() - self.standup_start_time).nanoseconds * 1e-9
+        # 启动竞态防护：/clock 尚未就绪时仅等待，不推进状态机
+        if now.nanoseconds == 0:
+            if not self._clock_wait_logged:
+                self.get_logger().info('Waiting for Gazebo sim clock (/clock) to synchronize...')
+                self._clock_wait_logged = True
+            return False
+
+        if self.standup_start_time is None:
+            self.standup_start_time = now
+            self.stuck_detection_start_time = now
+            if self._clock_wait_logged:
+                self.get_logger().info('Gazebo sim clock synchronized. Starting stand-up trajectory.')
+                self._clock_wait_logged = False
+
+        elapsed = (now - self.standup_start_time).nanoseconds * 1e-9
         t = min(max(elapsed / self.standup_duration, 0.0), 1.0)
 
         # Minimum Jerk 插值比率: 10t^3 - 15t^4 + 6t^5
@@ -750,9 +766,9 @@ class SpiderRobotController(Node):
             
             # 获取关节角度
             rail_pos = joint_positions.get(joint_names['rail'], 0.0)
-            haa_angle = joint_positions.get(joint_names['haa'], 0.0)
-            hfe_angle = joint_positions.get(joint_names['hfe'], 0.0)
-            kfe_angle = joint_positions.get(joint_names['kfe'], 0.0)
+            haa_angle = joint_positions.get(joint_names['coxa'], 0.0)
+            hfe_angle = joint_positions.get(joint_names['femur'], 0.0)
+            kfe_angle = joint_positions.get(joint_names['tibia'], 0.0)
             
             debug_data['legs'][leg_id] = {
                 'phase': round(phase, 3),
