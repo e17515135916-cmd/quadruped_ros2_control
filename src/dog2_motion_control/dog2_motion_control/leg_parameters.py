@@ -20,16 +20,29 @@ class LegParameters:
         leg_num: 腿部编号 (1, 2, 3, 4)
         base_position: 腿部基座在base_link中的位置 [x, y, z] (米)
         base_rotation: 腿部坐标系旋转 [roll, pitch, yaw] (弧度)
-        link_lengths: 链长 (HAA到HFE, HFE到KFE, KFE到foot) (米)
-        joint_limits: 关节限位字典 {'rail': (下限, 上限), 'haa': (下限, 上限), ...}
+        hip_offset:  rail_link -> coxa_joint 的位移 [x, y, z] (米)
+        hip_rpy: coxa_joint origin 的固定 rpy [roll, pitch, yaw] (弧度)
+        knee_offset: coxa_link -> femur_joint 的位移 [x, y, z] (米)
+        knee_rpy: femur_joint origin 的固定 rpy [roll, pitch, yaw] (弧度)
+        tibia_offset: femur_link -> tibia_joint 的位移 [x, y, z] (米)
+        tibia_rpy: tibia_joint origin 的固定 rpy [roll, pitch, yaw] (弧度)
+        link_lengths: 链长 (HFE到KFE, KFE到foot) (米)
+        joint_limits: 关节限位字典 {'rail': (下限, 上限), 'coxa': (下限, 上限), ...}
         rail_locked: 导轨是否锁定（当前阶段为True）
     """
     leg_id: str
     leg_num: int
     base_position: np.ndarray
     base_rotation: np.ndarray
+    hip_offset: np.ndarray
+    hip_rpy: np.ndarray
+    knee_offset: np.ndarray
+    knee_rpy: np.ndarray
+    tibia_offset: np.ndarray
+    tibia_rpy: np.ndarray
     link_lengths: Tuple[float, float, float]
     joint_limits: Dict[str, Tuple[float, float]]
+    shin_xyz: np.ndarray = None  # tibia_link 接触代理位置（tibia_joint 坐标系）
     rail_locked: bool = True
     
     def __post_init__(self):
@@ -40,6 +53,14 @@ class LegParameters:
             raise ValueError(f"Invalid leg_num: {self.leg_num}")
         if len(self.link_lengths) != 3:
             raise ValueError(f"link_lengths must have 3 elements, got {len(self.link_lengths)}")
+        if self.hip_offset.shape != (3,) or self.knee_offset.shape != (3,) or self.tibia_offset.shape != (3,):
+            raise ValueError("hip_offset/knee_offset/tibia_offset must be 3D vectors")
+        if self.hip_rpy.shape != (3,) or self.knee_rpy.shape != (3,) or self.tibia_rpy.shape != (3,):
+            raise ValueError("hip_rpy/knee_rpy/tibia_rpy must be 3D vectors")
+        if self.shin_xyz is None:
+            raise ValueError("shin_xyz must be provided (tibia_link contact proxy position)")
+        if np.asarray(self.shin_xyz).shape != (3,):
+            raise ValueError("shin_xyz must be a 3D vector")
 
 
 def create_leg_parameters() -> Dict[str, LegParameters]:
@@ -52,13 +73,16 @@ def create_leg_parameters() -> Dict[str, LegParameters]:
         字典，键为leg_id ('lf', 'rf', 'lh', 'rh')，值为LegParameters对象
     """
     # 从URDF提取的关键尺寸（米）
-    # 链长：HAA到HFE距离, HFE到KFE距离(大腿), KFE到foot距离(小腿)
-    L1 = 0.055  # HAA关节到HFE关节的距离（近似）
-    L2 = 0.152  # HFE关节到KFE关节的距离（大腿长度）
-    L3 = 0.299  # KFE关节到脚部的距离（小腿长度）
-    
+    # - HAA(=coxa) 关节原点：hip_xyz（不同腿略有差异）
+    # - HFE(=femur) 关节原点：knee_xyz（左/右腿符号不同）
+    # - KFE(=tibia) 关节原点：固定 xyz="0 -0.15201 0.12997"
+    # 现阶段 IK 仍按“3R解析近似模型”实现，link_lengths 保持兼容字段。
+    L1 = 0.055
+    L2 = 0.15201
+    L3 = 0.299
+
     link_lengths = (L1, L2, L3)
-    
+
     # 关节限位（从URDF提取）
     # 导轨：prismatic joint limits
     # 旋转关节：revolute joint limits（弧度）
@@ -75,11 +99,18 @@ def create_leg_parameters() -> Dict[str, LegParameters]:
         leg_num=1,
         base_position=np.array([0.1246, 0.0625, 0.0]),
         base_rotation=np.array([math.pi / 2, 0.0, 0.0]),
+        hip_offset=np.array([-0.016, 0.0199, 0.055]),
+        hip_rpy=np.array([0.0, 0.0, math.pi / 2]),
+        knee_offset=np.array([-0.0233, -0.055, 0.0274]),
+        knee_rpy=np.array([math.pi / 2, math.pi / 2, 0.0]),
+        tibia_offset=np.array([0.0, -0.15201, 0.12997]),
+        tibia_rpy=np.array([0.0, 0.0, 0.0]),
         link_lengths=link_lengths,
         joint_limits={
             'rail': (-0.111, 0.0),  # 前左导轨向负方向移动
             **joint_limits_template
         },
+        shin_xyz=np.array([0.0255, -0.1435, -0.0694]),
         rail_locked=True
     )
 
@@ -90,11 +121,18 @@ def create_leg_parameters() -> Dict[str, LegParameters]:
         leg_num=2,
         base_position=np.array([0.3711, 0.0625, 0.0]),
         base_rotation=np.array([math.pi / 2, 0.0, 0.0]),
+        hip_offset=np.array([0.016, 0.0199, 0.055]),
+        hip_rpy=np.array([0.0, 0.0, math.pi / 2]),
+        knee_offset=np.array([-0.0233, -0.055, 0.0274]),
+        knee_rpy=np.array([math.pi / 2, math.pi / 2, 0.0]),
+        tibia_offset=np.array([0.0, -0.15201, 0.12997]),
+        tibia_rpy=np.array([0.0, 0.0, 0.0]),
         link_lengths=link_lengths,
         joint_limits={
             'rail': (0.0, 0.111),  # 后左导轨向正方向移动
             **joint_limits_template
         },
+        shin_xyz=np.array([0.0255, -0.1435, -0.0694]),
         rail_locked=True
     )
 
@@ -105,11 +143,18 @@ def create_leg_parameters() -> Dict[str, LegParameters]:
         leg_num=3,
         base_position=np.array([0.3711, 0.1825, 0.0]),
         base_rotation=np.array([math.pi / 2, 0.0, -math.pi]),
+        hip_offset=np.array([-0.016, 0.0199, 0.055]),
+        hip_rpy=np.array([math.pi, 0.0, math.pi / 2]),
+        knee_offset=np.array([-0.0233, -0.055, -0.0254]),
+        knee_rpy=np.array([math.pi / 2, math.pi / 2, 0.0]),
+        tibia_offset=np.array([0.0, -0.15201, 0.12997]),
+        tibia_rpy=np.array([0.0, 0.0, 0.0]),
         link_lengths=link_lengths,
         joint_limits={
             'rail': (-0.111, 0.0),  # 后右导轨向负方向移动
             **joint_limits_template
         },
+        shin_xyz=np.array([-0.0265, -0.1435, -0.0694]),
         rail_locked=True
     )
 
@@ -120,11 +165,18 @@ def create_leg_parameters() -> Dict[str, LegParameters]:
         leg_num=4,
         base_position=np.array([0.1291, 0.1825, 0.0]),
         base_rotation=np.array([math.pi / 2, 0.0, -math.pi]),
+        hip_offset=np.array([0.0116, 0.0199, 0.055]),
+        hip_rpy=np.array([math.pi, 0.0, math.pi / 2]),
+        knee_offset=np.array([-0.0233, -0.055, -0.0254]),
+        knee_rpy=np.array([math.pi / 2, math.pi / 2, 0.0]),
+        tibia_offset=np.array([0.0, -0.15201, 0.12997]),
+        tibia_rpy=np.array([0.0, 0.0, 0.0]),
         link_lengths=link_lengths,
         joint_limits={
             'rail': (0.0, 0.111),  # 前右导轨向正方向移动
             **joint_limits_template
         },
+        shin_xyz=np.array([-0.0265, -0.1430, -0.0691]),
         rail_locked=True
     )
 

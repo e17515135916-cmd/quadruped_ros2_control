@@ -7,7 +7,7 @@ spider_robot_controller:
       stride_height: 0.01
       cycle_time: 1.5
       duty_factor: 0.75
-      body_height: 0.16
+      body_height: 0.24
       gait_type: "crawl"
       leg_sequence: ["leg1", "leg2", "leg3", "leg4"]
       phase_offsets:

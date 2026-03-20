@@ -8,17 +8,16 @@ from typing import Tuple, List, Dict
 from dataclasses import dataclass
 import numpy as np
 import math
-from .leg_parameters import get_leg_parameters
 
 
 @dataclass
 class GaitConfig:
-    """步态配置参数"""
-    stride_length: float = 0.08     # 步长（米）
-    stride_height: float = 0.05     # 步高（米）
+    """步态配置参数（保守初始值，优先保证IK可达）"""
+    stride_length: float = 0.04     # 步长（米）- 保守
+    stride_height: float = 0.04     # 步高（米）- 略降低
     cycle_time: float = 2.0         # 步态周期（秒）
     duty_factor: float = 0.75       # 支撑相占比
-    body_height: float = 0.16       # 身体高度（米）
+    body_height: float = 0.20       # 身体高度（米）- 对应足端z=-0.20
     gait_type: str = "crawl"        # 步态类型
 
 
@@ -42,34 +41,42 @@ class GaitGenerator:
     
     # 爬行步态相位偏移（按摆动顺序）
     # 摆动相在 [0, 0.25)，支撑相在 [0.25, 1.0)
-    # 要实现 leg1 → leg3 → leg2 → leg4 的摆动顺序：
-    # - leg1 在相位0.0开始摆动
-    # - leg3 在相位0.0开始摆动（需要在T/4后）→ 相位偏移 -0.25 = 0.75
-    # - leg2 在相位0.0开始摆动（需要在T/2后）→ 相位偏移 -0.5 = 0.5
-    # - leg4 在相位0.0开始摆动（需要在3T/4后）→ 相位偏移 -0.75 = 0.25
+    # 初始偏移让所有腿在 t=0 时都处于支撑相，间隔0.25保证摆动顺序。
+    # lf→lh→rf→rh 依次摆动，每隔 T/4 触发一次。
     PHASE_OFFSETS = {
-        'lf': 0.0,    # leg1: 在t=0时相位=0.0，立即摆动
-        'lh': 0.75,   # leg3: 在t=0时相位=0.75，在t=T/4时相位=0.0，开始摆动
-        'rf': 0.5,    # leg2: 在t=0时相位=0.5，在t=T/2时相位=0.0，开始摆动
-        'rh': 0.25,   # leg4: 在t=0时相位=0.25，在t=3T/4时相位=0.0，开始摆动
+        'lf': 0.50,  # t=0时相位=0.50（支撑相）
+        'lh': 0.75,  # t=0时相位=0.75（支撑相）
+        'rf': 0.25,  # t=0时相位=0.25（支撑相起点）
+        'rh': 0.00,  # t=0时相位=0.00（摆动相起点）
     }
     
-    def __init__(self, config: GaitConfig):
+    def __init__(self, config: GaitConfig, nominal_positions: Dict[str, np.ndarray] = None):
         """初始化步态生成器
         
         Args:
             config: 步态配置参数
+            nominal_positions: 外部标定的名义落脚点（base_link坐标系）
         """
         self.config = config
         self.current_time = 0.0  # 当前时间（秒）
         self.velocity = (0.0, 0.0, 0.0)  # 当前速度 (vx, vy, omega)
-        
-        # 脚部位置记录（仅用于稳定性计算，不作为轨迹生成的数学依赖）
-        self.foot_positions: Dict[str, np.ndarray] = {
+
+        # 名义落脚点：优先使用外部FK标定结果，未提供时使用保守兜底值
+        default_nominal = {
             'lf': np.array([0.3, -0.2, -self.config.body_height]),
             'rf': np.array([0.3, 0.2, -self.config.body_height]),
             'lh': np.array([-0.3, -0.2, -self.config.body_height]),
             'rh': np.array([-0.3, 0.2, -self.config.body_height]),
+        }
+        src_nominal = nominal_positions if nominal_positions is not None else default_nominal
+        self._nominal_positions: Dict[str, np.ndarray] = {
+            leg_id: np.array(src_nominal[leg_id], dtype=float)
+            for leg_id in ['lf', 'rf', 'lh', 'rh']
+        }
+
+        # 脚部位置记录（仅用于稳定性计算，不作为轨迹生成的数学依赖）
+        self.foot_positions: Dict[str, np.ndarray] = {
+            leg_id: pos.copy() for leg_id, pos in self._nominal_positions.items()
         }
         
         # 质心位置（简化假设：在base_link原点）
@@ -97,17 +104,14 @@ class GaitGenerator:
         vx, vy, omega = velocity
         velocity_magnitude = math.sqrt(vx**2 + vy**2)
         
-        # 步长与速度成正比（爬行步态步长较小）
-        self.config.stride_length = min(velocity_magnitude * self.config.cycle_time, 0.06)
+        # 步长与速度成正比（保守上限，优先保证IK可达）
+        self.config.stride_length = min(velocity_magnitude * self.config.cycle_time, 0.04)
         
         # 允许从配置文件设置步高，不强制覆盖
         
-        # 速度较快时可以适当缩短周期，但仍保持静态稳定
-        if velocity_magnitude > 0.15:
-            self.config.cycle_time = 1.5
-        else:
-            self.config.cycle_time = 2.0
-        
+        # 保持固定周期，避免步态中途 cycle_time 变化导致相位突跳
+        # cycle_time 由配置文件给定，不在运行时动态修改
+
         # 始终保持75% duty factor确保3腿着地
         self.config.duty_factor = 0.75
     
@@ -171,21 +175,17 @@ class GaitGenerator:
         phase = self.get_phase(leg_id)
         is_stance = self.is_stance_phase(leg_id)
         
-        # 1. 绝对锚点：蜘蛛式外展姿态（与新机械结构匹配）
-        leg_params = get_leg_parameters(leg_id)
-        x_offset = 0.02 if 'f' in leg_id else -0.02
-        y_offset = 0.1075 if 'l' in leg_id else -0.1075
-
-        nominal_pos = leg_params.base_position + np.array([
-            x_offset,
-            y_offset,
-            -self.config.body_height
-        ])
+        # 1. 绝对锚点：使用外部FK标定的名义落脚点
+        nominal_pos = self._nominal_positions[leg_id].copy()
         
         stride_vector = self._get_stride_vector()
         swing_duration = 1.0 - self.config.duty_factor
-        
-        if is_stance:
+
+        # 零速度时直接返回名义落脚点（无水平偏移，无摆动弧）
+        # Validates: Requirements 3.2
+        if np.linalg.norm(stride_vector) < 1e-9:
+            target_pos = nominal_pos
+        elif is_stance:
             # 支撑相：身体前进 = 脚相对身体向后退
             stance_phase = (phase - swing_duration) / self.config.duty_factor
             # 轨迹：从基准点前方 (+0.5 步长) 匀速退到后方 (-0.5 步长)
@@ -287,6 +287,23 @@ class GaitGenerator:
         
         return inside
     
+    def calibrate_nominal_positions(self, ik_solver, standing_angles: Dict[str, tuple]) -> None:
+        """从 FK 标定结果重新计算名义落脚点。
+
+        接受标定的站立角度字典，调用 FK 计算各腿的名义落脚点，
+        并更新 _nominal_positions 和 foot_positions。
+
+        Args:
+            ik_solver: KinematicsSolver 实例（需实现 solve_fk 方法）
+            standing_angles: {leg_id: (s_m, haa_rad, hfe_rad, kfe_rad)} 标定的站立角度
+
+        Requirements: 3.1, 3.4
+        """
+        for leg_id, angles in standing_angles.items():
+            foot_pos = ik_solver.solve_fk(leg_id, angles)
+            self._nominal_positions[leg_id] = np.array(foot_pos, dtype=float)
+            self.foot_positions[leg_id] = self._nominal_positions[leg_id].copy()
+
     def compute_support_triangle_area(self) -> float:
         """计算支撑三角形的面积
         
