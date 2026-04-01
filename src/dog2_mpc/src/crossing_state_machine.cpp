@@ -1,6 +1,9 @@
 #include "dog2_mpc/crossing_state_machine.hpp"
 #include <iostream>
 #include <cmath>
+#include <limits>
+#include <algorithm>
+#include <vector>
 
 namespace dog2_mpc {
 
@@ -16,6 +19,7 @@ void CrossingStateMachine::initialize(const RobotState& initial_state, const Win
     current_state_ = CrossingState::APPROACH;
     state_start_time_ = 0.0;
     total_time_ = 0.0;
+    transition_stable_elapsed_ = 0.0;
     
     std::cout << "[CrossingStateMachine] 初始化完成" << std::endl;
     std::cout << "  初始位置: x=" << initial_state.position.x() << "m" << std::endl;
@@ -26,9 +30,23 @@ void CrossingStateMachine::initialize(const RobotState& initial_state, const Win
 bool CrossingStateMachine::update(const RobotState& current_state, double dt) {
     total_time_ += dt;
     
-    // 检查是否可以转换到下一状态
-    if (canTransitionToNext(current_state)) {
+    if (current_state_ == CrossingState::COMPLETED) {
+        transition_stable_elapsed_ = 0.0;
+        return true;
+    }
+
+    // stable transition graph：
+    // 对当前阶段 guard 连续满足一段稳定保持时间后才允许切换，避免噪声触发抖动。
+    const bool guard_ok = canTransitionToNext(current_state);
+    if (guard_ok) {
+        transition_stable_elapsed_ += dt;
+    } else {
+        transition_stable_elapsed_ = 0.0;
+    }
+    
+    if (transition_stable_elapsed_ >= transition_stable_time_) {
         transitionToNextState();
+        transition_stable_elapsed_ = 0.0;
     }
     
     return true;
@@ -118,28 +136,219 @@ CrossingStateMachine::StageConstraints CrossingStateMachine::getCurrentConstrain
 }
 
 bool CrossingStateMachine::canTransitionToNext(const RobotState& current_state) const {
+    bool progress_ok = false;
     switch (current_state_) {
         case CrossingState::APPROACH:
-            return checkApproachComplete(current_state);
+            progress_ok = checkApproachComplete(current_state);
+            break;
         case CrossingState::BODY_FORWARD_SHIFT:
-            return checkBodyForwardShiftComplete(current_state);
+            progress_ok = checkBodyForwardShiftComplete(current_state);
+            break;
         case CrossingState::FRONT_LEGS_TRANSIT:
-            return checkFrontLegsTransitComplete(current_state);
+            progress_ok = checkFrontLegsTransitComplete(current_state);
+            break;
         case CrossingState::HYBRID_GAIT_WALKING:
-            return checkHybridGaitWalkingComplete(current_state);
+            progress_ok = checkHybridGaitWalkingComplete(current_state);
+            break;
         case CrossingState::RAIL_ALIGNMENT:
-            return checkRailAlignmentComplete(current_state);
+            progress_ok = checkRailAlignmentComplete(current_state);
+            break;
         case CrossingState::REAR_LEGS_TRANSIT:
-            return checkRearLegsTransitComplete(current_state);
+            progress_ok = checkRearLegsTransitComplete(current_state);
+            break;
         case CrossingState::ALL_KNEE_STATE:
-            return checkAllKneeStateComplete(current_state);
+            progress_ok = checkAllKneeStateComplete(current_state);
+            break;
         case CrossingState::RECOVERY:
-            return checkRecoveryComplete(current_state);
+            progress_ok = checkRecoveryComplete(current_state);
+            break;
         case CrossingState::CONTINUE_FORWARD:
             return true;  // 最后阶段，直接完成
         default:
             return false;
     }
+
+    if (!progress_ok) {
+        return false;
+    }
+
+    // 额外 guard：rail tracking + support polygon，避免阶段几何时序错配
+    const double rail_tracking_error = computeRailTrackingError(current_state);
+    const bool railStable = rail_tracking_error < rail_tracking_error_threshold_;
+
+    int contact_count = 0;
+    for (int i = 0; i < 4; ++i) {
+        if (current_state.foot_contacts[i]) {
+            contact_count++;
+        }
+    }
+
+    const double support_margin = computeSupportPolygonMargin(current_state);
+    bool supportStable = false;
+
+    // 支撑域退化（对角线 Trot：仅2足接触）时，使用 Capture Point (CP) 动态稳定裕度
+    // 以 CP 到两足连线线段的垂直距离 d_cp 判断是否允许 transition。
+    if (contact_count == 2) {
+        const double d_cp = support_margin;  // computeSupportPolygonMargin 在此退化分支返回 d_cp
+        supportStable = (d_cp < 0.025);
+    } else if (contact_count >= 3) {
+        // 多足支撑：使用几何支撑域裕度 margin
+        supportStable = (support_margin > support_polygon_margin_threshold_);
+    } else {
+        // 不足两点接触时无法稳定支撑
+        supportStable = false;
+    }
+
+    return railStable && supportStable;
+}
+
+double CrossingStateMachine::computeRailTrackingError(const RobotState& state) const {
+    const RobotState target = getTargetState();
+    // 最大逐腿位移偏差（单位：m）
+    return (state.sliding_positions - target.sliding_positions).cwiseAbs().maxCoeff();
+}
+
+double CrossingStateMachine::computeSupportPolygonMargin(const RobotState& state) const {
+    // 2D support margin:
+    // - 若足端接触数>=3：对接触点在 (x,y) 平面的凸包，计算 COM 到每条凸包边界的“有符号距离”
+    //   (CCW 凸包内侧为正，凸包外侧为负)，取最小值作为 margin。
+    // - 若足端接触数==2：支撑域退化为线段，margin 为 COM 到线段的垂距（投影落在线段内）；
+    //   否则返回负值以强制 guard 失效。
+
+    std::vector<Eigen::Vector2d> contact_points;
+    contact_points.reserve(4);
+
+    for (int i = 0; i < 4; ++i) {
+        if (!state.foot_contacts[i]) {
+            continue;
+        }
+        contact_points.emplace_back(
+            state.foot_positions[i].x(),
+            state.foot_positions[i].y());
+    }
+
+    if (contact_points.size() < 2) {
+        return -std::numeric_limits<double>::infinity();
+    }
+
+    // 去重（避免凸包算法数值抖动）
+    std::sort(contact_points.begin(), contact_points.end(),
+              [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
+                  if (a.x() != b.x()) return a.x() < b.x();
+                  return a.y() < b.y();
+              });
+    contact_points.erase(
+        std::unique(contact_points.begin(), contact_points.end(),
+                    [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
+                        return (a - b).norm() < 1e-9;
+                    }),
+        contact_points.end());
+
+    const Eigen::Vector2d com(state.position.x(), state.position.y());
+
+    auto cross_z = [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
+        return a.x() * b.y() - a.y() * b.x();
+    };
+
+    auto convexHull = [&](const std::vector<Eigen::Vector2d>& pts) {
+        // Monotonic chain; 返回 CCW 顺序且不重复首尾点
+        if (pts.size() <= 2) {
+            return pts;
+        }
+
+        std::vector<Eigen::Vector2d> H;
+        H.reserve(pts.size() * 2);
+
+        auto cross_3 = [&](const Eigen::Vector2d& O,
+                           const Eigen::Vector2d& A,
+                           const Eigen::Vector2d& B) {
+            return cross_z(A - O, B - O);
+        };
+
+        // lower hull
+        for (const auto& p : pts) {
+            while (H.size() >= 2 && cross_3(H[H.size() - 2], H.back(), p) <= 0.0) {
+                H.pop_back();
+            }
+            H.push_back(p);
+        }
+
+        // upper hull
+        const size_t lower_size = H.size();
+        for (int i = static_cast<int>(pts.size()) - 2; i >= 0; --i) {
+            const auto& p = pts[i];
+            while (H.size() > lower_size &&
+                   cross_3(H[H.size() - 2], H.back(), p) <= 0.0) {
+                H.pop_back();
+            }
+            H.push_back(p);
+        }
+
+        // H 首尾会重复到同一点，移除最后一个
+        if (!H.empty()) {
+            H.pop_back();
+        }
+        return H;
+    };
+
+    std::vector<Eigen::Vector2d> hull = convexHull(contact_points);
+
+    // 退化情况：线段
+    if (hull.size() == 2) {
+        const Eigen::Vector2d a = hull[0];
+        const Eigen::Vector2d b = hull[1];
+        const Eigen::Vector2d ab = b - a;
+        const double ab2 = ab.squaredNorm();
+        if (ab2 < 1e-12) {
+            return -std::numeric_limits<double>::infinity();
+        }
+
+        // Capture Point: CP = [x_com + sqrt(h/g)*x_dot, y_com + sqrt(h/g)*y_dot]
+        const double g = 9.81;
+        const double h = std::max(1e-6, state.position.z());
+        const double k = std::sqrt(h / g);
+        const Eigen::Vector2d cp(
+            state.position.x() + k * state.velocity.x(),
+            state.position.y() + k * state.velocity.y());
+
+        // distance from CP to segment [a,b]
+        const double t = (cp - a).dot(ab) / ab2;
+        const double t_clamped = std::max(0.0, std::min(1.0, t));
+        const Eigen::Vector2d closest = a + t_clamped * ab;
+        const double d_cp = (cp - closest).norm();
+
+        return d_cp;
+    }
+
+    if (hull.size() < 3) {
+        return -std::numeric_limits<double>::infinity();
+    }
+
+    // 计算凸包朝向（用于符号统一）
+    double area2 = 0.0;
+    for (size_t i = 0; i < hull.size(); ++i) {
+        const auto& p = hull[i];
+        const auto& q = hull[(i + 1) % hull.size()];
+        area2 += p.x() * q.y() - p.y() * q.x();
+    }
+    const double orientation_sign = (area2 >= 0.0) ? 1.0 : -1.0;  // CCW => +1
+
+    // 有符号距离：对每条边，使用 cross_z(e, com-a)/|e|
+    double margin = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < hull.size(); ++i) {
+        const Eigen::Vector2d p = hull[i];
+        const Eigen::Vector2d q = hull[(i + 1) % hull.size()];
+        const Eigen::Vector2d e = q - p;
+        const double elen = e.norm();
+        if (elen < 1e-12) {
+            continue;
+        }
+
+        const double signed_dist = orientation_sign * (cross_z(e, com - p) / elen);
+        margin = std::min(margin, signed_dist);
+    }
+
+    return margin;
 }
 
 void CrossingStateMachine::transitionToNextState() {
@@ -163,13 +372,20 @@ void CrossingStateMachine::transitionToNextState() {
     
     current_state_ = next_state;
     state_start_time_ = total_time_;
+    transition_stable_elapsed_ = 0.0;
 }
 
 double CrossingStateMachine::getProgress() const {
-    // 简单的线性进度计算
-    int total_states = 9;  // 0-8
+    // 进度定义为 0~1，对应 9 个阶段 (APPROACH..CONTINUE_FORWARD)；
+    // COMPLETED 为终态，进度固定为 1.0。
+    if (current_state_ == CrossingState::COMPLETED) {
+        return 1.0;
+    }
+
+    const int last_stage_index = static_cast<int>(CrossingState::CONTINUE_FORWARD);  // 8
     int current_index = static_cast<int>(current_state_);
-    return static_cast<double>(current_index) / total_states;
+    current_index = std::max(0, std::min(current_index, last_stage_index));
+    return static_cast<double>(current_index) / static_cast<double>(last_stage_index == 0 ? 1 : last_stage_index);
 }
 
 // 各阶段完成条件检查
@@ -392,6 +608,7 @@ void CrossingStateMachine::forceTransitionTo(CrossingState state) {
     std::cout << "[CrossingStateMachine] 强制转换到状态: " << getStateName(state) << std::endl;
     current_state_ = state;
     state_start_time_ = total_time_;
+    transition_stable_elapsed_ = 0.0;
 }
 
 } // namespace dog2_mpc

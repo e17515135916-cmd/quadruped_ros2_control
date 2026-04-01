@@ -26,6 +26,10 @@ public:
         this->declare_parameter("control_frequency", 20.0);
         this->declare_parameter("enable_sliding_constraints", true);
         this->declare_parameter("enable_boundary_constraints", false);
+        this->declare_parameter("rail_tracking_error_threshold", 0.005);
+        this->declare_parameter("support_polygon_margin_threshold", 0.015);
+        this->declare_parameter("crossing_transition_stable_time", 0.15);
+        this->declare_parameter("slack_linear_weight", 1e5);
         
         // 获取参数
         double mass = this->get_parameter("mass").as_double();
@@ -65,6 +69,22 @@ public:
         
         // 创建16维MPC控制器
         mpc_controller_ = std::make_unique<MPCController>(mass, inertia, params);
+
+        // rail soft-bound exact penalty 一次项权重（支持动态调参）
+        mpc_controller_->setSlackLinearWeight(
+            this->get_parameter("slack_linear_weight").as_double());
+
+        // 设置越障状态机 guard 参数（即使未启用 crossing，保持接口一致）
+        const double rail_tracking_error_threshold =
+            this->get_parameter("rail_tracking_error_threshold").as_double();
+        const double support_polygon_margin_threshold =
+            this->get_parameter("support_polygon_margin_threshold").as_double();
+        const double crossing_transition_stable_time =
+            this->get_parameter("crossing_transition_stable_time").as_double();
+        mpc_controller_->setCrossingGuardParams(
+            rail_tracking_error_threshold,
+            support_polygon_margin_threshold,
+            crossing_transition_stable_time);
         
         // 初始化16维参考轨迹（悬停）
         std::vector<Eigen::VectorXd> x_ref(horizon, Eigen::VectorXd::Zero(16));
@@ -189,6 +209,10 @@ private:
                                odom_received_, joint_received_);
             return;
         }
+
+        // 动态读取 exact penalty 一次项权重
+        mpc_controller_->setSlackLinearWeight(
+            this->get_parameter("slack_linear_weight").as_double());
         
         // 构建16维扩展状态
         Eigen::VectorXd extended_state(16);

@@ -1,17 +1,20 @@
-"""
-Spider Robot Controller - 主控制器
+"""dog2 主运动控制节点（rclpy）。
 
-协调所有子系统，实现50Hz实时主控制循环
-将 GaitGenerator(步态大脑), TrajectoryPlanner(轨迹平滑), 
-KinematicsSolver(运动学求解) 和 JointController(硬件驱动) 完美串联。
+该节点串联步态生成、目标平滑、逆运动学与 ros2_control 命令发布，保持 4-DoF 单腿拓扑：
+- rail 作为前置调度参数（模式/相位驱动），
+- 3R（hip_roll/hip_pitch/knee_pitch）作为标准 3-DoF 在固定 rail 下求解。
 """
 
 import time
+import math
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from std_msgs.msg import String
+from std_msgs.msg import String, Bool
 import json
+from enum import Enum
+
+from rcl_interfaces.msg import SetParametersResult
 
 from .gait_generator import GaitGenerator, GaitConfig
 from .kinematics_solver import create_kinematics_solver
@@ -21,35 +24,73 @@ from .joint_names import PREFIX_TO_LEG_MAP, get_leg_joint_names
 from .config_loader import ConfigLoader
 
 
-class SpiderRobotController(Node):
-    """蜘蛛机器人主控制器"""
+class LocomotionMode(Enum):
+    """运动模式：平地3DoF（导轨锁定）/越障4DoF（导轨激活）。"""
 
-    # FK 标定的站立角度（与 kinematics_solver.py 中保持一致）
-    # Requirements: 2.1, 2.2
-    _STANDING_ANGLES = {
-        "lf": (0.0, 0.0, 0.3000, -0.5000),
-        "lh": (0.0, 0.0, 0.3000, -0.5000),
-        "rh": (0.0, 0.0, 0.3000, -0.5000),
-        "rf": (0.0, 0.0, 0.3000, -0.5000),
-    }
+    CRUISE_3DOF = "cruise_3dof"
+    OBSTACLE_4DOF = "obstacle_4dof"
+
+
+class SpiderRobotController(Node):
+    """dog2 主控制器（50Hz 级别主循环）。"""
 
     def __init__(self, config_path=None):
         super().__init__("spider_robot_controller")
-        self.get_logger().info("Initializing Spider Robot Controller...")
+        self.get_logger().info("Initializing dog2 motion controller...")
 
         self.config_loader = ConfigLoader(config_path)
         self.config_loader.load()
         gait_config = self.config_loader.get_gait_config()
 
         self.ik_solver = create_kinematics_solver()
+        self.ik_solver.configure_regularization(self.config_loader.get_ik_regularization())
+        self._apply_config_joint_limits_to_ik()
+
+        control_params = self.config_loader.get_control_params()
+        self.control_period_sec = float(
+            self.declare_parameter(
+                "control_period_sec",
+                1.0 / float(control_params.get("frequency", 50.0)),
+            ).value
+        )
+        self.max_rail_velocity_mps = float(
+            self.declare_parameter("max_rail_velocity_mps", float(control_params.get("max_rail_velocity", 0.08))).value
+        )
+        self.max_rail_velocity_mps = max(1e-6, self.max_rail_velocity_mps)
+        self.rail_violation_count = {"lf": 0, "rf": 0, "lh": 0, "rh": 0}
+        self.max_rail_violation_before_emergency = int(
+            self.declare_parameter("max_rail_violation_before_emergency", 10).value
+        )
+
+        self.rail_alpha_rate_per_sec = float(self.declare_parameter("rail_alpha_rate_per_sec", 0.5).value)
+        self.velocity_lpf_tau_sec = float(self.declare_parameter("velocity_lpf_tau_sec", 0.25).value)
+        self.rail_lock_alpha_epsilon = float(self.declare_parameter("rail_lock_alpha_epsilon", 1e-3).value)
+        self.rail_locked_position_m = float(self.declare_parameter("rail_locked_position_m", 0.0).value)
+
+        self.emergency_descent_final_body_height_m = float(
+            self.declare_parameter("emergency_descent_final_body_height_m", 0.10).value
+        )
+
         self.trajectory_planner = TrajectoryPlanner()
         self.joint_controller = JointController(self)
 
-        # 用 FK 标定结果初始化 GaitGenerator 的名义落脚点
-        # Requirements: 3.1, 3.4
+        standing_pose = self.config_loader.get_config_data().get("standing_pose", None)
+        if standing_pose is None:
+            raise RuntimeError(
+                "Missing 'standing_pose' in config. Provide per-leg (rail, hip_roll, hip_pitch, knee_pitch)."
+            )
+        self._standing_joint_positions_by_leg = {
+            leg_id: (
+                float(standing_pose[leg_id]["rail_m"]),
+                float(standing_pose[leg_id]["hip_roll_rad"]),
+                float(standing_pose[leg_id]["hip_pitch_rad"]),
+                float(standing_pose[leg_id]["knee_pitch_rad"]),
+            )
+            for leg_id in ("lf", "lh", "rh", "rf")
+        }
         nominal_positions = {
-            leg_id: self.ik_solver.solve_fk(leg_id, angles)
-            for leg_id, angles in self._STANDING_ANGLES.items()
+            leg_id: self.ik_solver.solve_fk(leg_id, joints)
+            for leg_id, joints in self._standing_joint_positions_by_leg.items()
         }
         self.gait_generator = GaitGenerator(gait_config, nominal_positions)
 
@@ -60,22 +101,31 @@ class SpiderRobotController(Node):
         self.stop_start_time = 0.0
         self.last_time = time.time()
 
-        # Minimum Jerk ramp 状态
         self.is_ramping = False
         self.ramp_start_time = 0.0
-        self.ramp_duration = 2.0
+        self.ramp_duration_sec = float(self.declare_parameter("standup_ramp_duration_sec", 2.0).value)
         self.standing_joint_angles = {}
         self.ramp_last_valid_commands = {}
 
         self.is_emergency_mode = False
         self.emergency_start_time = 0.0
-        self.EMERGENCY_DESCENT_DURATION = 3.0
+        self.emergency_descent_duration_sec = float(
+            self.declare_parameter("emergency_descent_duration_sec", 3.0).value
+        )
 
         self.last_valid_joint_positions = {"lf": None, "rf": None, "lh": None, "rh": None}
         self.ik_failure_count = {"lf": 0, "rf": 0, "lh": 0, "rh": 0}
 
         self.pending_config_update = None
         self.last_cycle_phase = 0.0
+
+        self.mode = LocomotionMode.CRUISE_3DOF
+        self.target_mode = LocomotionMode.CRUISE_3DOF
+        self.rail_activation_alpha = 0.0
+        self.mode_transition_duration = 1.0
+
+        self.rail_activation_mode = False
+        self.current_rail_alpha = 0.0
 
         self.debug_mode = False
         self.debug_publisher = self.create_publisher(String, "/spider_debug_info", 10)
@@ -84,10 +134,40 @@ class SpiderRobotController(Node):
         self.cmd_vel_sub = self.create_subscription(
             Twist, "/cmd_vel", self._cmd_vel_callback, 10
         )
-        self.timer_period = 0.02
+        self.mode_switch_sub = self.create_subscription(
+            String, "/mode_switch", self._mode_switch_callback, 10
+        )
+        self.rail_mode_sub = self.create_subscription(
+            Bool, "/spider_rail_mode", self._on_rail_mode_msg, 10
+        )
+
+        self.timer_period = float(self.declare_parameter("timer_period_sec", self.control_period_sec).value)
         self.timer = None
 
-        self.get_logger().info("Spider Robot Controller is READY.")
+        self.add_on_set_parameters_callback(self._on_set_parameters)
+
+        self.get_logger().info(
+            "Spider Robot Controller is READY. "
+            "Mode=CRUISE_3DOF(alpha=0.0). Use /mode_switch with 'cruise_3dof' or 'obstacle_4dof'."
+        )
+
+    def _on_set_parameters(self, params):
+        for p in params:
+            if p.name == "rail_alpha_rate_per_sec":
+                self.rail_alpha_rate_per_sec = float(p.value)
+            elif p.name == "velocity_lpf_tau_sec":
+                self.velocity_lpf_tau_sec = float(p.value)
+            elif p.name == "rail_lock_alpha_epsilon":
+                self.rail_lock_alpha_epsilon = float(p.value)
+            elif p.name == "rail_locked_position_m":
+                self.rail_locked_position_m = float(p.value)
+            elif p.name == "emergency_descent_duration_sec":
+                self.emergency_descent_duration_sec = float(p.value)
+            elif p.name == "emergency_descent_final_body_height_m":
+                self.emergency_descent_final_body_height_m = float(p.value)
+            elif p.name == "max_rail_velocity_mps":
+                self.max_rail_velocity_mps = max(1e-6, float(p.value))
+        return SetParametersResult(successful=True)
 
     def _cmd_vel_callback(self, msg):
         if abs(msg.linear.x) < 0.001 and abs(msg.linear.y) < 0.001 and abs(msg.angular.z) < 0.001:
@@ -98,14 +178,34 @@ class SpiderRobotController(Node):
             v = (msg.linear.x, msg.linear.y, msg.angular.z)
             self.target_velocity = v
 
+    def _mode_switch_callback(self, msg: String):
+        mode_raw = msg.data.strip().lower()
+        if mode_raw in ("cruise", "cruise_3dof", "3dof", "flat"):
+            self.target_mode = LocomotionMode.CRUISE_3DOF
+        elif mode_raw in ("obstacle", "obstacle_4dof", "4dof", "window"):
+            self.target_mode = LocomotionMode.OBSTACLE_4DOF
+        else:
+            self.get_logger().warn(
+                f"Unknown mode_switch '{msg.data}'. Use cruise_3dof or obstacle_4dof."
+            )
+            return
+
+        self.get_logger().info(
+            f"Mode switch requested: {self.mode.value} -> {self.target_mode.value}."
+        )
+
+    def _on_rail_mode_msg(self, msg: Bool):
+        try:
+            self.rail_activation_mode = bool(getattr(msg, "data", False))
+        except Exception:
+            self.rail_activation_mode = False
+
     def start(self):
-        """启动控制器：先执行 Minimum Jerk 站立插值，再进入步态循环"""
         self.get_logger().info("Starting 50Hz control loop...")
         self.is_running = True
         self.is_stopping = False
         self.last_time = time.time()
 
-        # Requirements: 4.1
         self._compute_standing_joint_angles()
 
         self.is_ramping = True
@@ -115,26 +215,23 @@ class SpiderRobotController(Node):
         self.timer = self.create_timer(self.timer_period, self._timer_callback)
 
     def _compute_standing_joint_angles(self):
-        """将 FK 标定站立角映射到 URDF 关节名称字典。Requirements: 4.1"""
         self.standing_joint_angles = {}
-        for leg_id, (s_m, haa_rad, hfe_rad, kfe_rad) in self._STANDING_ANGLES.items():
+        for leg_id, (s_m, hip_roll_rad, hip_pitch_rad, knee_pitch_rad) in self._standing_joint_positions_by_leg.items():
             leg_num = PREFIX_TO_LEG_MAP[leg_id]
             jn = get_leg_joint_names(leg_num)
             self.standing_joint_angles[jn["rail"]] = s_m
-            self.standing_joint_angles[jn["coxa"]] = haa_rad
-            self.standing_joint_angles[jn["femur"]] = hfe_rad
-            self.standing_joint_angles[jn["tibia"]] = kfe_rad
+            self.standing_joint_angles[jn["hip_roll"]] = hip_roll_rad
+            self.standing_joint_angles[jn["hip_pitch"]] = hip_pitch_rad
+            self.standing_joint_angles[jn["knee_pitch"]] = knee_pitch_rad
         self.get_logger().info(
             f"Standing joint angles computed for {len(self.standing_joint_angles)} joints."
         )
 
     def _execute_standup_trajectory(self):
-        """Minimum Jerk 站立插值，使用 TrajectoryPlanner.smooth_phase()。Requirements: 4.2, 4.3"""
         elapsed = time.time() - self.ramp_start_time
-        t = min(elapsed / self.ramp_duration, 1.0)
+        t = min(elapsed / max(self.ramp_duration_sec, 1e-6), 1.0)
         phi = self.trajectory_planner.smooth_phase(t)
 
-        # Requirements: 4.5
         if not self.standing_joint_angles:
             self.get_logger().warn("Ramp: standing_joint_angles empty. Holding last valid commands.")
             if self.ramp_last_valid_commands:
@@ -146,7 +243,6 @@ class SpiderRobotController(Node):
         self.joint_controller.send_joint_commands(commands)
 
         if t >= 1.0:
-            # Requirements: 4.4
             self.is_ramping = False
             self.get_logger().info("Standup trajectory complete. Entering normal gait loop.")
 
@@ -174,13 +270,13 @@ class SpiderRobotController(Node):
 
     def _execute_emergency_descent(self):
         elapsed = time.time() - self.emergency_start_time
-        if elapsed >= self.EMERGENCY_DESCENT_DURATION:
+        if elapsed >= self.emergency_descent_duration_sec:
             self.get_logger().info("Emergency descent completed.")
             return True
 
-        progress = elapsed / self.EMERGENCY_DESCENT_DURATION
+        progress = elapsed / max(self.emergency_descent_duration_sec, 1e-6)
         initial_h = self.gait_generator.config.body_height
-        current_h = initial_h - (initial_h - 0.10) * progress
+        current_h = initial_h - (initial_h - self.emergency_descent_final_body_height_m) * progress
 
         target_joint_positions = {}
         for leg_id in ["lf", "rf", "lh", "rh"]:
@@ -193,9 +289,9 @@ class SpiderRobotController(Node):
                 s_m, haa, hfe, kfe = 0.0, 0.0, 0.0, 0.0
             jn = get_leg_joint_names(PREFIX_TO_LEG_MAP[leg_id])
             target_joint_positions[jn["rail"]] = s_m
-            target_joint_positions[jn["coxa"]] = haa
-            target_joint_positions[jn["femur"]] = hfe
-            target_joint_positions[jn["tibia"]] = kfe
+            target_joint_positions[jn["hip_roll"]] = haa
+            target_joint_positions[jn["hip_pitch"]] = hfe
+            target_joint_positions[jn["knee_pitch"]] = kfe
 
         self.joint_controller.send_joint_commands(target_joint_positions)
         if not self.joint_controller.monitor_rail_positions():
@@ -211,6 +307,25 @@ class SpiderRobotController(Node):
         self.update(dt)
 
     def update(self, dt):
+        try:
+            dt_eff = float(dt)
+        except Exception:
+            dt_eff = 0.0
+        if not math.isfinite(dt_eff) or dt_eff <= 0.0:
+            dt_eff = 0.0
+
+        try:
+            target_alpha = 1.0 if self.rail_activation_mode else 0.0
+            step = float(self.rail_alpha_rate_per_sec) * dt_eff
+            alpha = float(self.current_rail_alpha)
+            if target_alpha > alpha:
+                alpha = min(alpha + step, target_alpha)
+            else:
+                alpha = max(alpha - step, target_alpha)
+            self.current_rail_alpha = max(0.0, min(1.0, alpha))
+        except Exception:
+            self.current_rail_alpha = max(0.0, min(1.0, float(getattr(self, "current_rail_alpha", 0.0) or 0.0)))
+
         if not self.joint_controller.check_connection():
             self.get_logger().warn("Joint controller connection lost. Attempting reconnect...")
             if not self.joint_controller.attempt_reconnect():
@@ -223,7 +338,6 @@ class SpiderRobotController(Node):
                 self.stop()
             return
 
-        # Requirements: 4.2, 4.3, 4.4, 4.5
         if self.is_ramping:
             self._execute_standup_trajectory()
             return
@@ -248,8 +362,7 @@ class SpiderRobotController(Node):
         if self.is_stopping:
             self._handle_smooth_stop()
         else:
-            # 低通平滑速度，避免从静止到运动时足端目标位置突跳
-            alpha = min(1.0, dt / 0.25) if dt > 0.0 else 1.0
+            alpha = min(1.0, dt / max(self.velocity_lpf_tau_sec, 1e-6)) if dt > 0.0 else 1.0
             cvx, cvy, comega = self.current_velocity
             tvx, tvy, tomega = self.target_velocity
             self.current_velocity = (
@@ -260,10 +373,24 @@ class SpiderRobotController(Node):
 
         self.gait_generator.update(dt, self.current_velocity)
 
+        self._update_mode_transition(dt)
+
         target_joint_positions = {}
         for leg_id in ["lf", "rf", "lh", "rh"]:
             foot_pos = self.gait_generator.get_foot_target(leg_id)
-            ik_result = self.ik_solver.solve_ik(leg_id, foot_pos)
+            phase_scalar = self.gait_generator.get_phase_progress_scalar(leg_id)
+            leg_params = self.ik_solver.leg_params[leg_id]
+            rail_min, rail_max = leg_params.joint_limits['rail']
+            rail_mid = 0.5 * (rail_min + rail_max)
+            rail_half_span = 0.5 * (rail_max - rail_min)
+            # 临时策略：在 CRUISE_3DOF（导轨未激活）时，把导轨锁到 0.0m，
+            # 便于先验证“导轨锁定”情况下系统是否能稳定运行。
+            if self.mode == LocomotionMode.CRUISE_3DOF and float(self.current_rail_alpha) <= self.rail_lock_alpha_epsilon:
+                rail_hint = self.rail_locked_position_m
+            else:
+                rail_hint = rail_mid + (phase_scalar * rail_half_span) * self.current_rail_alpha
+
+            ik_result = self.ik_solver.solve_ik(leg_id, foot_pos, rail_offset=rail_hint)
 
             if ik_result is None:
                 self._handle_ik_failure(leg_id, foot_pos)
@@ -274,18 +401,80 @@ class SpiderRobotController(Node):
                     s_m, haa, hfe, kfe = 0.0, 0.0, 0.0, 0.0
             else:
                 s_m, haa, hfe, kfe = ik_result
-                self.last_valid_joint_positions[leg_id] = ik_result
+                s_m = self._apply_rail_velocity_limit(leg_id, s_m, dt)
+                self.last_valid_joint_positions[leg_id] = (s_m, haa, hfe, kfe)
                 self.ik_failure_count[leg_id] = 0
 
             jn = get_leg_joint_names(PREFIX_TO_LEG_MAP[leg_id])
             target_joint_positions[jn["rail"]] = s_m
-            target_joint_positions[jn["coxa"]] = haa
-            target_joint_positions[jn["femur"]] = hfe
-            target_joint_positions[jn["tibia"]] = kfe
+            target_joint_positions[jn["hip_roll"]] = haa
+            target_joint_positions[jn["hip_pitch"]] = hfe
+            target_joint_positions[jn["knee_pitch"]] = kfe
 
         self.joint_controller.send_joint_commands(target_joint_positions)
         if self.debug_mode:
             self._publish_debug_info(target_joint_positions)
+
+    def _update_mode_transition(self, dt: float):
+        """平滑更新导轨激活因子 alpha∈[0,1]。"""
+        target_alpha = 1.0 if self.target_mode == LocomotionMode.OBSTACLE_4DOF else 0.0
+        if dt <= 0.0:
+            self.rail_activation_alpha = target_alpha
+        else:
+            step = dt / max(self.mode_transition_duration, 1e-3)
+            if target_alpha > self.rail_activation_alpha:
+                self.rail_activation_alpha = min(target_alpha, self.rail_activation_alpha + step)
+            else:
+                self.rail_activation_alpha = max(target_alpha, self.rail_activation_alpha - step)
+
+        if self.rail_activation_alpha <= 1e-3:
+            new_mode = LocomotionMode.CRUISE_3DOF
+        elif self.rail_activation_alpha >= 1.0 - 1e-3:
+            new_mode = LocomotionMode.OBSTACLE_4DOF
+        else:
+            new_mode = self.mode
+
+        if new_mode != self.mode:
+            self.mode = new_mode
+            self.get_logger().info(
+                f"Mode reached: {self.mode.value}, rail_alpha={self.rail_activation_alpha:.2f}"
+            )
+
+    def _apply_rail_velocity_limit(self, leg_id, rail_target, dt):
+        if dt <= 0.0:
+            return rail_target
+
+        last = self.last_valid_joint_positions.get(leg_id)
+        if last is None:
+            self.rail_violation_count[leg_id] = 0
+            return rail_target
+
+        prev_s = float(last[0])
+        max_delta = self.max_rail_velocity_mps * dt
+        delta = float(rail_target - prev_s)
+
+        if abs(delta) <= max_delta:
+            self.rail_violation_count[leg_id] = 0
+            return rail_target
+
+        limited_target = prev_s + max(-max_delta, min(max_delta, delta))
+        self.rail_violation_count[leg_id] += 1
+        self.get_logger().warn(
+            f"Rail velocity limit hit on {leg_id}: "
+            f"requested_delta={delta:.4f}m, limited_delta={limited_target - prev_s:.4f}m, dt={dt:.4f}s"
+        )
+
+        if (
+            self.rail_violation_count[leg_id] > self.max_rail_violation_before_emergency
+            and self.ik_failure_count[leg_id] > 3
+        ):
+            self.get_logger().error(
+                f"CRITICAL: persistent rail velocity violation on {leg_id} "
+                f"(count={self.rail_violation_count[leg_id]}, ik_fail={self.ik_failure_count[leg_id]})."
+            )
+            self.engage_emergency_safety_posture()
+
+        return limited_target
 
     def _handle_smooth_stop(self):
         elapsed = self.gait_generator.current_time - self.stop_start_time
@@ -310,8 +499,37 @@ class SpiderRobotController(Node):
         if config_path is not None:
             self.config_loader = ConfigLoader(config_path)
         self.config_loader.load()
+        self._apply_config_joint_limits_to_ik()
+
+        control_params = self.config_loader.get_control_params()
+        self.max_rail_velocity_mps = float(control_params.get("max_rail_velocity", self.max_rail_velocity_mps))
+        self.max_rail_velocity_mps = max(1e-6, self.max_rail_velocity_mps)
+
         self.update_gait_config(self.config_loader.get_gait_config())
         self.get_logger().info(f"Config reloaded from {self.config_loader.config_path}")
+
+    def _apply_config_joint_limits_to_ik(self):
+        """将YAML中的关节限位同步到IK参数，避免与LegParameters硬编码割裂。"""
+        joint_limits = self.config_loader.get_joint_limits()
+        rail_cfg = joint_limits.get("rail", {})
+        haa_cfg = joint_limits.get("haa", {})
+        hfe_cfg = joint_limits.get("hfe", {})
+        kfe_cfg = joint_limits.get("kfe", {})
+
+        rail_limits = (float(rail_cfg["min"]), float(rail_cfg["max"]))
+        coxa_limits = (float(haa_cfg["min"]), float(haa_cfg["max"]))
+        femur_limits = (float(hfe_cfg["min"]), float(hfe_cfg["max"]))
+        tibia_limits = (float(kfe_cfg["min"]), float(kfe_cfg["max"]))
+
+        for leg_id, params in self.ik_solver.leg_params.items():
+            params.joint_limits["rail"] = rail_limits
+            params.joint_limits["coxa"] = coxa_limits
+            params.joint_limits["femur"] = femur_limits
+            params.joint_limits["tibia"] = tibia_limits
+            self.get_logger().info(
+                f"Applied IK limits for {leg_id}: "
+                f"rail={rail_limits}, coxa={coxa_limits}, femur={femur_limits}, tibia={tibia_limits}"
+            )
 
     def _check_and_apply_config_update(self):
         if self.pending_config_update is None or self.is_stopping:
@@ -361,9 +579,9 @@ class SpiderRobotController(Node):
                 "foot_position": {"x": round(fp[0], 4), "y": round(fp[1], 4), "z": round(fp[2], 4)},
                 "joint_positions": {
                     "rail_m": round(joint_positions.get(jn["rail"], 0.0), 4),
-                    "haa_rad": round(joint_positions.get(jn["coxa"], 0.0), 4),
-                    "hfe_rad": round(joint_positions.get(jn["femur"], 0.0), 4),
-                    "kfe_rad": round(joint_positions.get(jn["tibia"], 0.0), 4),
+                    "hip_roll_rad": round(joint_positions.get(jn["hip_roll"], 0.0), 4),
+                    "hip_pitch_rad": round(joint_positions.get(jn["hip_pitch"], 0.0), 4),
+                    "knee_pitch_rad": round(joint_positions.get(jn["knee_pitch"], 0.0), 4),
                 },
             }
         support_legs = self.gait_generator.get_support_triangle()
@@ -396,9 +614,19 @@ def main(args=None):
     except KeyboardInterrupt:
         controller.get_logger().info("Keyboard Interrupt detected.")
     finally:
-        controller.stop()
-        controller.destroy_node()
-        rclpy.shutdown()
+        try:
+            controller.stop()
+        except Exception:
+            pass
+        try:
+            controller.destroy_node()
+        except Exception:
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

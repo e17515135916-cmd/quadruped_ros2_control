@@ -26,6 +26,15 @@
   <xacro:property name="prismatic_effort" value="100"/>
   <xacro:property name="prismatic_velocity" value="5"/>
 
+  <!--
+    Simulation mass scaling factor for A/B testing.
+    Set to 1.0 for normal operation.
+    For the "divide by 4" comparison run, set to 0.25.
+    This value is provided by the URDF xacro launch mapping.
+  -->
+  <xacro:arg name="mass_scale" default="1.0"/>
+  <xacro:property name="mass_scale" value="$(arg mass_scale)"/>
+
   <!-- Shared angle constants -->
   <xacro:property name="PI_CONST" value="3.141592653589793"/>
   <xacro:property name="half_pi" value="1.5707963267948966"/>
@@ -90,8 +99,8 @@
   <link name="base_link">
     <inertial>
       <origin xyz="0.2492 0.12503 0.0" rpy="${half_pi} 0 0"/>
-      <mass value="6.0"/>
-      <inertia ixx="0.0153" ixy="0.00011" ixz="0" iyy="0.052" iyz="0" izz="0.044"/>
+      <mass value="${mass_scale * 6.0}"/>
+      <inertia ixx="${mass_scale * 0.0153}" ixy="${mass_scale * 0.00011}" ixz="0" iyy="${mass_scale * 0.052}" iyz="0" izz="${mass_scale * 0.044}"/>
     </inertial>
     <visual>
       <origin xyz="-0.9780 0.87203 -0.2649" rpy="0 0 0"/>
@@ -124,8 +133,8 @@
   <link name="${prefix}_rail_link">
     <inertial>
       <origin rpy="0 0 0" xyz="${slider_inertia_xyz}"/>
-      <mass value="0.3"/>
-      <inertia ixx="0.0001071" ixy="0" ixz="0" iyy="8.386e-05" iyz="0" izz="7.869e-05"/>
+      <mass value="${mass_scale * 0.3}"/>
+      <inertia ixx="${mass_scale * 0.0001071}" ixy="0" ixz="0" iyy="${mass_scale * 8.386e-05}" iyz="0" izz="${mass_scale * 7.869e-05}"/>
     </inertial>
     <visual>
       <geometry>
@@ -152,8 +161,8 @@
   <link name="${prefix}_coxa_link">
     <inertial>
       <origin rpy="0 0 0" xyz="-0.0233 -0.0383 0.000879"/>
-      <mass value="0.25"/>
-      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+      <mass value="${mass_scale * 0.25}"/>
+      <inertia ixx="${mass_scale * 0.0001}" ixy="0" ixz="0" iyy="${mass_scale * 0.0001}" iyz="0" izz="${mass_scale * 0.0001}"/>
     </inertial>
     <visual>
       <geometry>
@@ -180,8 +189,8 @@
   <link name="${prefix}_femur_link">
     <inertial>
       <origin rpy="0 0 0" xyz="${thigh_xyz}"/>
-      <mass value="0.4"/>
-      <inertia ixx="0.000666" ixy="0" ixz="0" iyy="0.000356" iyz="0.000266" izz="0.000534"/>
+      <mass value="${mass_scale * 0.4}"/>
+      <inertia ixx="${mass_scale * 0.000666}" ixy="0" ixz="0" iyy="${mass_scale * 0.000356}" iyz="${mass_scale * 0.000266}" izz="${mass_scale * 0.000534}"/>
     </inertial>
     <visual>
       <origin rpy="${thigh_rpy}" xyz="0 0 0"/>
@@ -210,8 +219,8 @@
   <link name="${prefix}_tibia_link">
     <inertial>
       <origin rpy="0 0 0" xyz="${shin_xyz}"/>
-      <mass value="0.5"/>
-      <inertia ixx="0.004517" ixy="0.0000087" ixz="0.0000042" iyy="0.000975" iyz="-0.001769" izz="0.003666"/>
+      <mass value="${mass_scale * 0.5}"/>
+      <inertia ixx="${mass_scale * 0.004517}" ixy="${mass_scale * 0.0000087}" ixz="${mass_scale * 0.0000042}" iyy="${mass_scale * 0.000975}" iyz="${mass_scale * -0.001769}" izz="${mass_scale * 0.003666}"/>
     </inertial>
     <visual>
       <geometry>
@@ -369,6 +378,9 @@
   <gazebo>
     <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
       <parameters>${controllers_yaml}</parameters>
+      <!-- Keep consistent with ros2_controllers.yaml (gz_ros_control.ros__parameters.*). -->
+      <hold_joints>true</hold_joints>
+      <position_proportional_gain>1.0</position_proportional_gain>
       <robot_param>robot_description</robot_param>
       <robot_param_node>robot_state_publisher</robot_param_node>
     </plugin>

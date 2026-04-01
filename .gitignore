@@ -12,6 +12,7 @@ __pycache__/
 *.pyo
 *.pyd
 .venv/
+.hypothesis/
 
 # Editor/OS
 .vscode/

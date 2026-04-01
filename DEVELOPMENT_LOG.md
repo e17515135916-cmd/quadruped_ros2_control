@@ -1,5 +1,123 @@
 # DEVELOPMENT_LOG
 
+## 2026-03-31 11:14 Gazebo 质量缩放 A/B 试验基建 + 导轨跟踪瓶颈定位
+- **结论（最重要）**
+  - `gz_ros2_control` 的 `position_proportional_gain` 是“位置误差→期望速度”的系数（而非力矩 PID 的 P），工程上不应暴力拉高到几十；在本环境中该参数也不会从 controllers YAML/URDF 自动注入，必须运行时 set。
+  - A/B 试验显示：`mass_scale=0.25` 时 rail 跟踪压力显著降低，而 `mass_scale=1.0` 在同样工况下可复现 rail tracking error 瞬态暴涨并触发 slip 急停，说明真实载荷下导轨伺服带宽不足是关键矛盾之一（与“无限带宽 IK 指令”形成撕裂）。
+
+- **工程改动：质量缩放参数化（便于可重复 A/B）**
+  - 文件：`src/dog2_description/urdf/dog2.urdf.xacro`
+    - 新增 xacro 参数 `mass_scale`（默认 `1.0`），并将 `base_link` 及四条腿主要 link 的 `mass`、`inertia` 按比例缩放（用于 A/B，不改变几何）。
+  - 文件：`src/dog2_motion_control/launch/spider_gazebo_complete.launch.py`
+    - 新增 launch 参数 `mass_scale`，并通过 xacro mappings 注入 URDF 生成链路。
+    - 用法：
+      - `ros2 launch dog2_motion_control spider_gazebo_complete.launch.py mass_scale:=0.25`
+      - `ros2 launch dog2_motion_control spider_gazebo_complete.launch.py mass_scale:=1.0`
+
+- **工程改动：自动注入 gz_ros2_control 增益（避免“忘记 set 参数”污染对照）**
+  - 文件：`src/dog2_motion_control/dog2_motion_control/gz_gain_setter.py`（新增）
+    - 启动后等待 `/gz_ros2_control` 出现，自动设置 `position_proportional_gain`。
+  - 文件：`src/dog2_motion_control/setup.py`
+    - 注册 console script：`gz_gain_setter = dog2_motion_control.gz_gain_setter:main`
+  - 文件：`src/dog2_motion_control/launch/spider_gazebo_complete.launch.py`
+    - 新增 launch 参数 `p_gain`（默认 `1.5`），启动时自动执行一次注入。
+    - 用法：`ros2 launch ... p_gain:=1.5`
+
+- **步态/控制侧收敛（用于减少 rail 指令带宽与触发概率）**
+  - 文件：`src/dog2_motion_control/config/gait_params.yaml`
+    - 收敛步态基线：`stride_length 0.10→0.06`、`stride_length_max 0.10→0.08`、`stride_height 0.05→0.03`、`cycle_time 1.0→1.2`
+    - 新增/启用导轨限速：`control.max_rail_velocity: 0.15`（50Hz 下约 3mm/周期）
+
+- **实验记录（摘要）**
+  - `mass_scale=1.0` + `p_gain=1.5` + `vx=0.06`：可复现 rail tracking error 瞬态（如 25mm/29mm 量级）并触发 `CRITICAL: Rail slip detected!`，进入 emergency descent。
+  - `mass_scale=0.25`：rail tracking 报警显著减少（仍需在统一口径下跑满时长做最终统计）。
+
+## 2026-03-30 20:29 Gazebo 导轨急停去抖 + 急停锁定无阶跃 + 步幅上限解锁
+- **背景现象（Gazebo）**
+  - `rail_position_controller` 在仿真中存在毫米级稳态跟踪误差，原先以 `±0.5mm` 判定“导轨滑移”会导致机器人一进入步态就急停。
+  - 急停分支将导轨目标硬锁到 `0.0m`，在存在位置偏差时形成位置阶跃（step input），进一步放大冲击与误触发风险。
+  - `GaitGenerator` 将 `stride_length` 同时用作运行时自适应步长上限，导致 YAML 里 `stride_length=0.02` 时步幅被永久卡死为 2cm（无论 `/cmd_vel` 多大）。
+
+- **修复 1：导轨滑移监控参数化 + 去抖（治标）**
+  - 文件：`src/dog2_motion_control/dog2_motion_control/joint_controller.py`
+  - 移除硬编码 `RAIL_SLIP_THRESHOLD_M=0.0005`，改为 ROS2 参数：
+    - `rail_slip_threshold`（默认 `0.005`，5mm）
+    - `rail_slip_patience`（默认 `3` 帧）
+  - 新增 `rail_slip_counters`：仅当某导轨误差连续超阈值达到 `patience` 才触发 CRITICAL 急停；误差回落则清零计数。
+
+- **修复 2：急停导轨锁定“无阶跃”（治标）**
+  - 文件：`src/dog2_motion_control/dog2_motion_control/joint_controller.py`
+  - 重构 `lock_rails_with_max_effort()`：急停锁定目标优先使用 `current_joint_states` 的测量位置；测量缺失时回退 `last_rail_targets`，避免硬锁 `0.0m` 产生冲击。
+
+- **修复 3：步幅上限解耦（治本）**
+  - 文件：`src/dog2_motion_control/dog2_motion_control/gait_generator.py`
+    - 新增 `GaitConfig.stride_length_max`，并将 `_stride_length_limit` 迁移为使用 `stride_length_max`（缺省回退到 `stride_length`）。
+  - 文件：`src/dog2_motion_control/dog2_motion_control/config_loader.py`
+    - 默认配置与校验支持 `gait.stride_length_max`，并映射到 `GaitConfig`。
+  - 文件：`src/dog2_motion_control/config/gait_params.yaml`
+    - 将基线步态参数调整为更明显的“可观察大步”：
+      - `stride_length=0.10`
+      - `stride_length_max=0.10`
+      - `stride_height=0.05`
+      - `cycle_time=1.0`
+
+- **临时策略（用于验证导轨锁定工况）**
+  - 文件：`src/dog2_motion_control/dog2_motion_control/spider_robot_controller.py`
+  - 在 `CRUISE_3DOF` 且 `current_rail_alpha≈0` 时，将 `rail_hint` 临时强制为 `0.0m`，便于先在“导轨锁定”工况下验证步态稳定性与急停逻辑不误触发。
+
+- **验证要点**
+  - 启动仿真后持续发布 `/cmd_vel`（例如 `x≈0.12 m/s` 起步），应不再因单次瞬态 rail 误差立即触发急停。
+  - `/spider_debug_info` 中 `joint_positions.rail_m`、足端目标与步幅应随速度输入显著增大，不再被 2cm 上限锁死。
+
+## 2026-03-30 16:07 越障阶段数量与进度语义对齐修复
+- **状态机阶段数量修复（必须修改项）**
+  - 将 `CrossingStateMachine` 的阶段注释与语义从 **8 stages** 修正为 **9 stages**：`src/dog2_mpc/include/dog2_mpc/crossing_state_machine.hpp`。
+  - 修正 `CrossingStateMachine::getProgress()`：进度严格映射到 `APPROACH..CONTINUE_FORWARD` 的 **0~1**，`COMPLETED` 进度固定为 **1.0**，避免进度越界：`src/dog2_mpc/src/crossing_state_machine.cpp`。
+- **文档同步**
+  - 将 `dog2_crossing_design_guide.md` 中关于 “8 stages/8个阶段” 的描述统一为 **9 stages**，避免文档与实现继续漂移。
+- **工程验证**
+  - `colcon build --packages-select dog2_mpc --symlink-install` 编译通过。
+
+## 2026-03-30 17:06 越障 guard 与 rail soft bound 理论加固
+- **stable transition graph 加固（rail tracking + 支撑稳定双 guard）**
+  - 在 `src/dog2_mpc/src/crossing_state_machine.cpp` 中将 `canTransitionToNext()` 改为：除了原有阶段完成条件（progress guard）外，再叠加
+    - `rail_tracking_error < rail_tracking_error_threshold_`（默认 0.005m，支持 ROS2 参数覆盖）
+    - 支撑稳定 guard（见下条）
+  - 相关阈值接口/成员见 `src/dog2_mpc/include/dog2_mpc/crossing_state_machine.hpp`。
+- **两足支撑（退化线段）死锁修复：使用 Capture Point 动态稳定裕度**
+  - 先前针对 `contact_count < 3` 的支撑裕度 guard 采用静态几何 1D/X 近似，且在 `contact_count==2`（Trot 对角线步态、支撑退化为线段）时会导致 guard 永真/永假，进而 stage transition 死锁。
+  - 本次在 `src/dog2_mpc/src/crossing_state_machine.cpp`
+    - 将 `computeSupportPolygonMargin()` 的退化线段分支改为返回 **CP 到当前两足连线段的垂距**（而非纯几何到 x 范围距离）
+    - 并在 `contact_count==2` 时在 `canTransitionToNext()` 中以 `d_cp < 0.025m` 作为动态放行条件
+  - CP 定义：`CP = [x_com + sqrt(h/g)*vx_com, y_com + sqrt(h/g)*vy_com]`，其中 `h = max(1e-6, z_com)`，`g=9.81`。
+- **rail soft bound 约束升级为真正可行的“软约束”（Slack 解耦 + 精确惩罚）**
+  - 目标：避免 OSQP 在边界附近出现 `Infeasible/Unbounded`，同时又允许微小越界由 slack 吸收，并通过 exact penalty 逼近硬约束极限。
+  - 在 `src/dog2_mpc/src/mpc_controller.cpp`：
+    - 取消原先“5mm 宽容区当软约束”的硬化做法
+    - 引入 **rail 下界/上界**两套解耦 slack 变量：
+      - `s_lower(k,i) >= 0`
+      - `s_upper(k,i) >= 0`
+    - 约束形式：
+      - 下界：`d_i + s_lower(k,i) >= d_min(i)`
+      - 上界：`d_i - s_upper(k,i) <= d_max(i)`
+    - **非负约束（s >= 0）与上界（近似无穷）**：新增对应不等式行进入 QP 的 `A/l/u`，确保 OSQP 不会因为 slack 未被约束而触发 `OSQP_UNBOUNDED`。
+    - exact penalty：
+      - slack 惩罚从仅二次项（Hessian）升级为：同时在梯度向量 `q` 中对 slack 加入一次项强惩罚（`current_slack_weight_`）。
+  - 变量结构与 penalty weight 通过：
+    - `src/dog2_mpc/include/dog2_mpc/mpc_controller.hpp` / `src/dog2_mpc/src/mpc_controller.cpp` 实现（新增 `current_slack_weight_` 与 `setSlackLinearWeight()`）。
+- **exact penalty 权重动态调参（禁止硬编码）**
+  - 在 `src/dog2_mpc/src/mpc_node_complete.cpp` 与 `src/dog2_mpc/src/mpc_node_16d.cpp`：
+    - 新增 ROS2 参数 `slack_linear_weight`（默认 `1e5`）
+    - 在控制循环中动态读取并通过 `mpc_controller_->setSlackLinearWeight(...)` 下发给 QP 的 exact penalty
+
+**工程验证（构建 + 关键可执行测试）**
+- `colcon build --packages-select dog2_mpc --symlink-install` 编译通过
+- 运行：
+  - `./test_sliding_constraints`（通过）
+  - `./test_crossing_mpc_simple`（通过，crossing + slack 相关 QP 能成功 OSQP 求解）
+  - `./test_crossing_mpc`（通过）
+  - `./test_crossing_system`：在当前玩具/参数下表现为超时（但未观察到 OSQP 求解结构级崩溃）
+
 ## 2026-03-18 10:47 今日工作概述
 完成 Gazebo Fortress + ros2_control 启动链路的验证与修复，确保控制器成功激活并进入 50 Hz 主循环；针对“蜘蛛式外展步态”持续出现的 IK Failure 进行了系统性诊断，确认问题来源于目标落足点在 Y 方向超出可达工作空间，并将步态外展参数下调以逼近可行解。
 
@@ -314,3 +432,247 @@ ros2 launch dog2_motion_control spider_gazebo_complete.launch.py
 1. 记录一次完整启动日志，确认“等待时钟同步 -> 起立完成 -> READY_FOR_MPC”三段状态转移连续可复现。
 2. 在 debug 模式下增加轻量状态摘要（状态机阶段、dt、phase）用于联调可视化。
 3. 将 `/clock` 就绪检查抽成可复用启动健康检查函数，供后续控制节点复用。
+
+---
+
+## 2026-03-27 04:44 冗余IK基线参数化与离线越障分析基建
+
+本轮工作聚焦“导轨冗余自由度可控化 + 可量化评估”两条主线：
+将 3-DoF 解析近似 + 导轨参数化基线从硬编码推进到可配置形态，并补齐离线越障分析工具链，为后续 QP/WBC 深化提供可复现实验地基。
+
+### 💻 工程实现
+- **IK 正则化求解基线增强（KinematicsSolver）**
+  - 在 `kinematics_solver.py` 中新增模块化求解子函数：
+    - `_compute_local_jacobian`（局部雅可比数值计算）
+    - `_solve_3r_with_fixed_rail`（固定导轨下 DLS + 正则 3R 求解）
+    - `_rail_regularization_cost`（导轨中位/姿态偏差/连续性综合代价）
+  - 引入 `_last_solution` 作为每条腿的时序缓存，显著抑制导轨和关节解的帧间抖动。
+
+- **步态相位先验接入（GaitGenerator → Controller → IK）**
+  - 在 `gait_generator.py` 新增 `get_phase_progress_scalar(leg_id)`，输出约 `[-0.5, 0.5]` 的步长相位标量。
+  - 在 `spider_robot_controller.py` 中使用该标量构建 `rail_hint`，并通过 `solve_ik(..., rail_offset=rail_hint)` 注入导轨先验，形成“步态意图驱动冗余分配”的闭环。
+
+- **离线越障分析脚本（新增）**
+  - 新增 `src/dog2_motion_control/scripts/obstacle_analysis.py`：
+    - 复用现有 `GaitGenerator + KinematicsSolver` 做离线时域仿真
+    - 支持台阶与窗框型障碍参数化注入
+    - 输出关键指标：IK 失败数、导轨归一化利用率、关节解帧间变化量（连续性）
+  - `setup.py` 注册脚本入口：`obstacle_analysis = scripts.obstacle_analysis:main`。
+
+### ✅ 验证结果
+- 已对核心改动文件执行静态检查，未引入新的 linter 错误。
+- 导轨先验 + 状态缓存链路已打通，具备后续参数联调与离线指标对比能力。
+
+### 🚀 下一步计划
+1. 将 IK 正则参数（阻尼、导轨中位惩罚、连续性惩罚等）统一纳入 YAML 并支持运行时更新。
+2. 增加离线报告的场景批处理与 CSV 导出，建立参数扫描基准集。
+3. 在接触模型层补充足端接触一致性对照实验，评估导轨策略在高差落足下的稳定裕度。
+
+---
+
+## 2026-03-27 15:24 落足缓冲过渡（摆动末段 10%）首版落地
+
+本次完成“第一步：落足缓冲过渡代码编写”，在保持无状态锚点法主体不变的前提下，最小侵入式加入摆动相末段 Z 轴缓冲，目标是从轨迹源头降低落足硬冲击。
+
+### 💻 工程实现
+- **落足缓冲参数化接入（YAML）**
+  - 在 `src/dog2_motion_control/config/gait_params.yaml` 的 `gait` 下新增：
+    - `foot_landing_buffer.enable`
+    - `foot_landing_buffer.swing_phase_ratio`
+    - `foot_landing_buffer.poly_order`
+    - `foot_landing_buffer.target_landing_vel_z`
+  - 默认开启 `enable: true`，便于直接仿真观察；可一键关闭回退。
+
+- **配置加载链路打通（ConfigLoader）**
+  - `config_loader.py` 默认配置增加 `gait.foot_landing_buffer`。
+  - 在 gait 参数校验中增加对缓冲参数的范围校验：
+    - `swing_phase_ratio ∈ (0,1)`
+    - `poly_order ∈ {3,5}`
+    - `target_landing_vel_z ∈ [0,0.3]`
+  - `get_gait_config()` 已将上述参数注入 `GaitConfig`。
+
+- **轨迹生成器缓冲逻辑（GaitGenerator）**
+  - 复用现有 `_apply_landing_buffer()`：仅在摆动相最后 `swing_phase_ratio` 时间窗生效。
+  - 采用 5 次多项式（最小冲击）`s=6t^5-15t^4+10t^3`（可降级 3 次）。
+  - 仅修正 Z 轴，不改动 X/Y 迈步轨迹，确保对水平步态最小扰动。
+  - 增加日志：首次进入缓冲窗口 info + 连续 debug（buffer_phase/Z pos/Z vel）。
+
+- **腿序语义修正**
+  - `gait_generator.py` 中腿序日志映射统一为：`1=LF, 2=LH, 3=RH, 4=RF`。
+
+### ✅ 当前状态
+- 代码与参数链路已落地，可直接编译并在 Gazebo 中观察落足段速度收敛表现。
+- 回退机制已具备：仅需将 `foot_landing_buffer.enable` 设为 `false` 即可恢复旧逻辑。
+
+### 🚀 下一步
+1. 先做仿真验证（日志 + 可视观感 + 话题数据）确认缓冲生效与稳定性收益。
+2. 若验证通过，再进入足端碰撞代理与接触参数微调。
+
+---
+
+## 2026-03-27 15:24 落足缓冲过渡（第一步）落地
+
+本轮按“最小侵入、可回退”的原则，完成摆动相末段落足缓冲改造：
+在 **摆动相最后 10% 时间窗** 内对足端 Z 轨迹施加 5 次多项式缓动（最小冲击），用于将落足瞬间速度平滑收敛至近零，降低硬接触冲击。
+
+### 💻 工程实现
+- **步态发生器缓冲逻辑接入**
+  - 文件：`src/dog2_motion_control/dog2_motion_control/gait_generator.py`
+  - 在摆动相末段新增 `_apply_landing_buffer()`：
+    - 默认使用 5 次多项式 `s(t)=6t^5-15t^4+10t^3`
+    - 兼容 3 次多项式降级分支（配置可选）
+    - 仅修正 Z 轴（X/Y 水平轨迹保持不变）
+  - 新增缓冲阶段日志：
+    - 进入缓冲窗口时打印 `enter landing buffer phase`
+    - debug 输出 `buffer_phase / Z pos / Z vel` 便于联调
+
+- **参数化配置打通（含回退开关）**
+  - 文件：`src/dog2_motion_control/config/gait_params.yaml`
+  - 新增配置块：
+    - `foot_landing_buffer.enable`
+    - `foot_landing_buffer.swing_phase_ratio`
+    - `foot_landing_buffer.poly_order`
+    - `foot_landing_buffer.target_landing_vel_z`
+  - 文件：`src/dog2_motion_control/dog2_motion_control/config_loader.py`
+    - 增加默认值、参数校验与 `GaitConfig` 映射，确保 YAML→运行时参数完整生效
+
+- **腿序标识对齐（日志语义统一）**
+  - 文件：`src/dog2_motion_control/dog2_motion_control/gait_generator.py`
+  - `LEG_ORDER` 调整为项目固化约定：`1=LF, 2=LH, 3=RH, 4=RF`
+
+### ✅ 当前状态
+- 缓冲逻辑已接入轨迹生成链路，并具备配置开关回退能力。
+- 当 `foot_landing_buffer.enable=false` 时，可无代码改动回退到旧轨迹行为。
+
+### 🧪 建议验证
+1. 观察日志是否出现各腿 `enter landing buffer phase`。
+2. 关注落足前 `Z vel` 是否平滑趋近 `target_landing_vel_z`（默认 `0.01 m/s`）。
+3. Gazebo 观察落足冲击是否减弱、底盘高频振动是否下降。
+
+---
+
+## 2026-03-27 15:39 坐标系注释补全与 default_nominal 符号修正
+
+针对默认名义落足点在离线/兜底路径下的左右符号一致性风险，本轮完成最小修复并补充显式注释，防止后续误改。
+
+### 💻 工程实现
+- 文件：`src/dog2_motion_control/dog2_motion_control/gait_generator.py`
+- 在 `default_nominal` 上方新增坐标系说明注释：
+  - `base_link` 采用标准 ROS 右手系：`X前、Y左、Z上`
+  - 左侧腿（LF/LH）应满足 `Y>0`
+  - 右侧腿（RF/RH）应满足 `Y<0`
+- 修正 `default_nominal` 的左右腿 Y 符号：
+  - `lf/lh`: `+0.2`
+  - `rf/rh`: `-0.2`
+
+### ✅ 结果
+- 默认（未传入 `nominal_positions`）轨迹基准与 URDF / leg_base_positions 的坐标语义一致。
+- 正常主链路（FK 标定注入 nominal）保持不受影响；离线脚本/兜底路径一致性提升。
+
+---
+
+## 2026-03-27 16:10 离线越障分析批处理与 CSV 导出
+
+为提升参数联调效率，本轮在离线分析工具中补齐“场景批跑 + 可落盘指标”能力，减少手工重复执行与结果抄录成本。
+
+### 💻 工程实现
+- 文件：`src/dog2_motion_control/scripts/obstacle_analysis.py`
+- 新增批处理参数：
+  - `--batch`：启用预设场景批量执行
+  - `--scenarios`：逗号分隔场景列表（`flat/step/window/mixed`）
+  - `--csv-out`：将每腿指标导出为 CSV
+- 场景机制：
+  - `flat`：无障碍基线
+  - `step`：仅台阶扰动
+  - `window`：仅窗框扰动
+  - `mixed`：台阶 + 窗框组合
+- 输出结构改造：
+  - 统一按 `scenario + leg` 汇总指标
+  - 控制台按场景分组打印 `IK failures / rail norm / joint dq`
+  - CSV 字段包含：
+    - `scenario, leg, ik_failures, rail_mean_abs_norm, rail_max_abs_norm, rail_mean_norm, joint_mean_dq, joint_max_dq`
+
+### ✅ 当前状态
+- 脚本语法检查通过（`python3 -m py_compile`）。
+- 运行时依赖 `ament_index_python`，需在 ROS2 环境下执行完整离线分析。
+
+### 🧪 推荐用法
+```bash
+cd ~/aperfect/carbot_ws
+source /opt/ros/$ROS_DISTRO/setup.bash
+source install/setup.bash
+ros2 run dog2_motion_control obstacle_analysis \
+  --batch \
+  --scenarios flat,step,window,mixed \
+  --duration 12.0 \
+  --dt 0.02 \
+  --csv-out /tmp/obstacle_metrics.csv
+```
+
+---
+
+## 2026-04-01 16:32 MPC 架构层清洗（参数外置 + 构建规范 + Launch 收敛）
+
+完成 `dog2_mpc` 工程架构层标准化，核心是“单一参数源 + 干净构建元数据 + 启动链路无硬编码”：
+
+- **参数文件外置与统一**
+  - 新增 `src/dog2_mpc/config/dog2_ctrl_params.yaml`，覆盖 `mpc_node` / `mpc_node_16d` / `mpc_node_complete` 的 `declare_parameter` 参数集合。
+  - 参数按逻辑分组整理（注释分段）：`dynamics`、`mpc_core`、`constraints`、`safety_thresholds`、`mpc_weights`、`nominal_pose`。
+  - 同步收敛旧 `mpc_params.yaml` 到同一参数口径，避免双配置源漂移。
+
+- **构建系统净化**
+  - `src/dog2_mpc/CMakeLists.txt` 删除模板化教学注释块（`ament_lint_auto` 区域冗余说明），保留有效依赖与目标结构。
+  - `src/dog2_mpc/package.xml` 移除 `TODO` 描述与许可证占位，补全规范 `<description>` 与 `<license>`。
+  - 补齐与 CMake 对齐的依赖声明：`pkg-config`、`eigen`、`osqp`，并保持运行时依赖一致。
+
+- **Launch 结构重构**
+  - 重构并清理：
+    - `launch/mpc_wbc_simulation.launch.py`
+    - `launch/complete_simulation.launch.py`
+    - `launch/simple_crossing_sim.launch.py`
+    - `launch/test_mpc_wbc_only.launch.py`
+  - 全部显式加载 `dog2_ctrl_params.yaml`，删除陈旧注释块、测试残留和节点内硬编码控制参数。
+  - 启动文件统一为简洁 PEP8 风格：参数声明最小化、Node 结构扁平、职责清晰。
+
+---
+
+## 2026-04-01 继续：仓库级尾项清洗（杂质文件 + 命名一致性）
+
+在架构层清洗后，继续完成仓库尾项净化，目标是减少“无意义变更噪音”和“历史命名残留”：
+
+- **仓库杂质清理**
+  - 删除根目录误生成空文件：`=`
+  - `.gitignore` 增补测试工件目录：`.hypothesis/`
+
+- **离线脚本命名一致性收口**
+  - 文件：`src/dog2_motion_control/scripts/offline_obstacle_analysis.py`
+  - 将旧关节输出键名统一为当前语义命名：
+    - `haa_rad/hfe_rad/kfe_rad` → `coxa_rad/femur_rad/tibia_rad`
+  - 对应局部变量同步替换，确保离线 CSV 字段与主控制链路术语一致，降低后处理误读风险。
+
+---
+
+## 2026-04-01 继续：全仓统一清洗第二轮（package 元数据收口）
+
+本轮聚焦“包元数据可发布性”与“占位文本归零”，在不触及功能逻辑前提下完成统一收口：
+
+- **占位 maintainer/许可证清理**
+  - 统一替换为规范字段：
+    - `<maintainer email="dev@example.com">Developer</maintainer>`
+    - `<license>Apache-2.0</license>`（保留已有明确 `MIT` 的包不改）
+  - 覆盖文件：
+    - `src/dog2_mpc/package.xml`
+    - `src/dog2_demos/package.xml`
+    - `src/dog2_description/package.xml`
+    - `src/dog2_dynamics/package.xml`
+    - `src/dog2_interfaces/package.xml`
+    - `src/dog2_gait_planner/package.xml`
+    - `src/dog2_state_estimation/package.xml`
+    - `src/dog2_wbc/package.xml`
+    - `src/dog2_visualization/package.xml`（仅 maintainer 占位替换）
+
+- **占位 description 收口**
+  - 将 `dog2_dynamics / dog2_interfaces / dog2_gait_planner / dog2_state_estimation / dog2_wbc` 的 `TODO: Package description` 替换为简洁功能描述，避免后续打包/审查阶段被占位信息阻断。
+
+- **结果**
+  - 全仓 `package.xml` 中 `todo.todo`、`TODO license/description`、`Your Name/your@email.com` 已清零。

@@ -2,6 +2,7 @@
 #define DOG2_MPC_CROSSING_STATE_MACHINE_HPP
 
 #include <Eigen/Dense>
+#include <array>
 #include <string>
 #include <memory>
 
@@ -10,7 +11,7 @@ namespace dog2_mpc {
 /**
  * @brief Dog2窗框越障状态机
  * 
- * 实现8阶段越障过程：
+ * 实现9阶段越障过程：
  * 0. 初始接近 (Approach)
  * 1. 机身前探 (Body Forward Shift)  
  * 2. 前腿穿越 (Front Legs Transit)
@@ -185,6 +186,32 @@ public:
     double getProgress() const;
 
     /**
+     * @brief 获取当前窗框障碍物参数
+     */
+    WindowObstacle getWindowObstacle() const { return window_; }
+
+    /**
+     * @brief 设置 rail tracking guard 阈值（单位：m）
+     */
+    void setRailTrackingErrorThreshold(double threshold) {
+        rail_tracking_error_threshold_ = threshold;
+    }
+
+    /**
+     * @brief 设置支撑多边形 guard 阈值（单位：m）
+     */
+    void setSupportPolygonMarginThreshold(double threshold) {
+        support_polygon_margin_threshold_ = threshold;
+    }
+
+    /**
+     * @brief 设置 stage transition 稳定保持时长（单位：s）
+     */
+    void setTransitionStableTime(double t) {
+        transition_stable_time_ = t;
+    }
+
+    /**
      * @brief 是否完成越障
      * 
      * @return true 越障完成
@@ -199,6 +226,33 @@ private:
     
     RobotState initial_state_;      ///< 初始状态
     WindowObstacle window_;         ///< 窗框参数
+
+    /**
+     * @brief 稳定保持时间（稳定 transition graph 的关键：guards 需要连续满足才允许切换）
+     */
+    double transition_stable_time_ = 0.15;     ///< s
+    double transition_stable_elapsed_ = 0.0;   ///< s
+
+    /**
+     * @brief rail 跟踪 guard 阈值（2mm）
+     */
+    double rail_tracking_error_threshold_ = 0.005;  ///< m
+
+    /**
+     * @brief support polygon guard 阈值（1.5cm）
+     * 以 x 方向 1D 支撑区间近似计算 margin
+     */
+    double support_polygon_margin_threshold_ = 0.015;  ///< m
+
+    /**
+     * @brief 计算 rail 跟踪误差（最大逐腿偏差）
+     */
+    double computeRailTrackingError(const RobotState& state) const;
+
+    /**
+     * @brief 计算 support polygon margin（x 方向 1D 近似）
+     */
+    double computeSupportPolygonMargin(const RobotState& state) const;
     
     /**
      * @brief 状态转换逻辑

@@ -22,11 +22,18 @@ class ConfigLoader:
     DEFAULT_CONFIG = {
         'gait': {
             'stride_length': 0.08,
+            'stride_length_max': 0.12,
             'stride_height': 0.05,
             'cycle_time': 2.0,
             'duty_factor': 0.75,
             'body_height': 0.16,
-            'gait_type': 'crawl'
+            'gait_type': 'crawl',
+            'foot_landing_buffer': {
+                'enable': False,
+                'swing_phase_ratio': 0.1,
+                'poly_order': 5,
+                'target_landing_vel_z': 0.01,
+            },
         },
         'joint_limits': {
             'rail': {'min': -0.05, 'max': 0.05},
@@ -37,6 +44,15 @@ class ConfigLoader:
         'control': {
             'frequency': 50.0,
             'max_joint_velocity': 2.0
+        },
+        'ik_regularization': {
+            'rail_candidates': 17,
+            'dls_lambda': 0.001,
+            'max_iterations': 150,
+            'position_tolerance': 0.01,
+            'rail_neutral_weight': 0.05,
+            'posture_weight': 0.001,
+            'smooth_weight': 0.005
         }
     }
     
@@ -137,6 +153,13 @@ class ConfigLoader:
             control = self.config_data['control']
             if not self._validate_control_params(control):
                 return False
+
+            # IK 正则参数为可选，缺失时回退默认值
+            if 'ik_regularization' in self.config_data:
+                if not self._validate_ik_regularization(self.config_data['ik_regularization']):
+                    return False
+            else:
+                self.config_data['ik_regularization'] = self.DEFAULT_CONFIG['ik_regularization'].copy()
             
             return True
             
@@ -154,7 +177,7 @@ class ConfigLoader:
             True表示有效，False表示无效
         """
         # 检查必需的参数
-        required_params = ['stride_length', 'stride_height', 'cycle_time', 
+        required_params = ['stride_length', 'stride_height', 'cycle_time',
                           'duty_factor', 'body_height', 'gait_type']
         for param in required_params:
             if param not in gait:
@@ -165,6 +188,17 @@ class ConfigLoader:
         if gait['stride_length'] <= 0 or gait['stride_length'] > 0.2:
             print(f"Error: Invalid stride_length: {gait['stride_length']} (must be in (0, 0.2])")
             return False
+
+        # 可选：stride_length_max（用于自适应上限），缺失则默认等于 stride_length
+        if 'stride_length_max' in gait:
+            sl_max = float(gait['stride_length_max'])
+            sl = float(gait['stride_length'])
+            if sl_max <= 0.0 or sl_max > 0.3:
+                print(f"Error: Invalid stride_length_max: {sl_max} (must be in (0, 0.3])")
+                return False
+            if sl_max < sl:
+                print(f"Error: stride_length_max ({sl_max}) must be >= stride_length ({sl})")
+                return False
         
         if gait['stride_height'] <= 0 or gait['stride_height'] > 0.15:
             print(f"Error: Invalid stride_height: {gait['stride_height']} (must be in (0, 0.15])")
@@ -190,6 +224,31 @@ class ConfigLoader:
         if gait['gait_type'] not in ['crawl', 'trot', 'walk']:
             print(f"Error: Invalid gait_type: {gait['gait_type']} (must be 'crawl', 'trot', or 'walk')")
             return False
+
+        # 验证落足缓冲参数（可选）
+        fb = gait.get('foot_landing_buffer')
+        if fb is not None:
+            if not isinstance(fb, dict):
+                print("Error: foot_landing_buffer must be a dict")
+                return False
+
+            ratio = float(fb.get('swing_phase_ratio', 0.1))
+            if ratio <= 0.0 or ratio >= 1.0:
+                print(f"Error: foot_landing_buffer.swing_phase_ratio must be in (0,1), got {ratio}")
+                return False
+
+            poly_order = int(fb.get('poly_order', 5))
+            if poly_order not in (3, 5):
+                print(f"Error: foot_landing_buffer.poly_order must be 3 or 5, got {poly_order}")
+                return False
+
+            target_vel_z = float(fb.get('target_landing_vel_z', 0.01))
+            if target_vel_z < 0.0 or target_vel_z > 0.3:
+                print(
+                    "Error: foot_landing_buffer.target_landing_vel_z must be in [0,0.3], "
+                    f"got {target_vel_z}"
+                )
+                return False
         
         return True
     
@@ -245,6 +304,42 @@ class ConfigLoader:
             return False
         
         return True
+
+    def _validate_ik_regularization(self, ik_reg: Dict[str, Any]) -> bool:
+        """验证IK正则化参数。"""
+        required = [
+            'rail_candidates',
+            'dls_lambda',
+            'max_iterations',
+            'position_tolerance',
+            'rail_neutral_weight',
+            'posture_weight',
+            'smooth_weight',
+        ]
+        for key in required:
+            if key not in ik_reg:
+                print(f"Error: Missing ik_regularization parameter '{key}'")
+                return False
+
+        if int(ik_reg['rail_candidates']) < 1:
+            print("Error: rail_candidates must be >= 1")
+            return False
+        if float(ik_reg['dls_lambda']) <= 0.0:
+            print("Error: dls_lambda must be > 0")
+            return False
+        if int(ik_reg['max_iterations']) < 1:
+            print("Error: max_iterations must be >= 1")
+            return False
+        if float(ik_reg['position_tolerance']) <= 0.0:
+            print("Error: position_tolerance must be > 0")
+            return False
+
+        for w_key in ['rail_neutral_weight', 'posture_weight', 'smooth_weight']:
+            if float(ik_reg[w_key]) < 0.0:
+                print(f"Error: {w_key} must be >= 0")
+                return False
+
+        return True
     
     def get_gait_config(self) -> GaitConfig:
         """获取步态配置对象
@@ -261,13 +356,25 @@ class ConfigLoader:
             self.config_data = self.DEFAULT_CONFIG.copy()
         
         gait = self.config_data['gait']
+        foot_landing_buffer = gait.get(
+            'foot_landing_buffer',
+            self.DEFAULT_CONFIG['gait']['foot_landing_buffer'],
+        )
+
         return GaitConfig(
             stride_length=gait['stride_length'],
+            stride_length_max=float(gait.get('stride_length_max', gait['stride_length'])),
             stride_height=gait['stride_height'],
             cycle_time=gait['cycle_time'],
             duty_factor=gait['duty_factor'],
             body_height=gait['body_height'],
-            gait_type=gait['gait_type']
+            gait_type=gait['gait_type'],
+            foot_landing_buffer_enable=bool(foot_landing_buffer.get('enable', False)),
+            foot_landing_buffer_swing_phase_ratio=float(foot_landing_buffer.get('swing_phase_ratio', 0.1)),
+            foot_landing_buffer_poly_order=int(foot_landing_buffer.get('poly_order', 5)),
+            foot_landing_buffer_target_landing_vel_z=float(
+                foot_landing_buffer.get('target_landing_vel_z', 0.01)
+            ),
         )
     
     def get_joint_limits(self) -> Dict[str, Dict[str, float]]:
@@ -291,6 +398,13 @@ class ConfigLoader:
             self.load()
         
         return self.config_data['control']
+
+    def get_ik_regularization(self) -> Dict[str, float]:
+        """获取IK正则化参数"""
+        if not self.is_loaded:
+            self.load()
+
+        return self.config_data.get('ik_regularization', self.DEFAULT_CONFIG['ik_regularization']).copy()
     
     def get_config_data(self) -> Dict[str, Any]:
         """获取完整配置数据

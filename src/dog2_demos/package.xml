@@ -4,8 +4,8 @@
   <name>dog2_demos</name>
   <version>0.0.0</version>
   <description>Demo scripts for Dog2 robot</description>
-  <maintainer email="dell@todo.todo">dell</maintainer>
-  <license>TODO: License declaration</license>
+  <maintainer email="dev@example.com">Developer</maintainer>
+  <license>Apache-2.0</license>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

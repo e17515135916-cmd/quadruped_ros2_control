@@ -1,26 +1,104 @@
-# 快速测试步态参数配置文件
-# 
-# 此配置使用更快的步态周期，用于快速测试和调试
-# 
-# 使用方法：
-# ros2 launch dog2_motion_control spider_gazebo_complete.launch.py \
-#   config_file:=$(ros2 pkg prefix dog2_motion_control)/share/dog2_motion_control/config/gait_params_fast.yaml
+# 快速测试步态参数配置文件 (修复版)
+spider_robot_controller:
+  ros__parameters:
 
-# 继承默认配置，只覆盖需要修改的参数
-gait:
-  stride_length: 0.06      # 较小的步长
-  stride_height: 0.04      # 较小的步高
-  cycle_time: 1.0          # 更快的周期（1秒）
-  duty_factor: 0.75        # 保持75%支撑相
-  body_height: 0.2
-  gait_type: "crawl"
+    # --- 快速步态被覆盖的参数 ---
+    gait:
+      stride_length: 0.20      # 更大的步长，释放导轨与关节工作空间
+      stride_height: 0.06      # 步幅变大，适当抬高防绊倒
+      cycle_time: 1.5          # 放宽周期，给摆动相更多绝对时间
+      duty_factor: 0.75        # crawl 步态至少保持 3 腿支撑
+      body_height: 0.2
+      gait_type: "crawl"
+      leg_sequence: ["leg1", "leg2", "leg3", "leg4"]
+      phase_offsets:
+        leg1: 0.0
+        leg2: 90.0
+        leg3: 180.0
+        leg4: 270.0
 
-control:
-  frequency: 50.0
-  max_joint_velocity: 3.0  # 允许更快的关节速度
+    control:
+      frequency: 50.0
+      max_joint_velocity: 3.0  # 允许更快的关节速度
+      max_joint_acceleration: 5.0
+      velocity_scale:
+        linear_x: 1.0
+        linear_y: 1.0
+        angular_z: 1.0
+      smooth_stop:
+        enabled: true
+        deceleration_time: 1.0
 
-debug:
-  enabled: true            # 启用调试模式
-  publish_foot_trajectory: true
-  publish_support_triangle: true
-  log_level: "DEBUG"
+    debug:
+      enabled: true            # 启用调试模式
+      publish_foot_trajectory: true
+      publish_support_triangle: true
+      publish_com_projection: false
+      log_level: "DEBUG"
+      visualization:
+        foot_trajectory_color: [1.0, 0.0, 0.0, 1.0]
+        support_triangle_color: [0.0, 1.0, 0.0, 0.5]
+        com_projection_color: [0.0, 0.0, 1.0, 1.0]
+    debug_mode: true
+
+    # --- 必须保留的底层构型参数 (切勿删除) ---
+    joint_limits:
+      rail:
+        min: -0.05
+        max: 0.05
+        locked_position: 0.0
+        slip_threshold: 0.0005
+      haa:
+        min: -0.785
+        max: 0.785
+      hfe:
+        min: -1.57
+        max: 1.57
+      kfe:
+        min: -2.356
+        max: 0.0
+
+    stability:
+      com_margin: 0.02
+      max_body_tilt: 0.262
+      verify_support_triangle: true
+      min_support_legs: 3
+
+    workspace:
+      foot_x_min: -0.35
+      foot_x_max: 0.35
+      foot_y_min: -0.35
+      foot_y_max: 0.35
+      foot_z_min: -0.45
+      foot_z_max: -0.05
+
+    error_handling:
+      ik_failure:
+        use_last_valid: true
+        max_consecutive_failures: 5
+      joint_stuck:
+        detection_enabled: true
+        velocity_threshold: 0.01
+        time_threshold: 2.0
+        effort_reduction: 0.5
+      emergency_posture:
+        enabled: true
+        body_height: 0.1
+        transition_time: 3.0
+        rail_lock_effort: 1.0
+
+    leg_geometry:
+      l0_rail_range: 0.05
+      l1_haa_to_hfe: 0.055
+      l2_hfe_to_kfe: 0.152
+      l3_kfe_to_foot: 0.299
+      leg_base_positions:
+        leg1: [0.1535, 0.0725, 0.0]
+        leg2: [-0.1535, 0.0725, 0.0]
+        leg3: [-0.1535, -0.0725, 0.0]
+        leg4: [0.1535, -0.0725, 0.0]
+      leg_base_rotations:
+        leg1: [1.5708, 0.0, 0.0]
+        leg2: [1.5708, 0.0, -3.1416]
+        leg3: [1.5708, 0.0, -3.1416]
+        leg4: [1.5708, 0.0, 0.0]

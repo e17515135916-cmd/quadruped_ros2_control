@@ -1,11 +1,10 @@
-"""
-运动学求解器
+"""腿部运动学求解器（rail + 3R）。
 
-实现腿部的逆运动学(IK)和正运动学(FK)求解
-支持4条腿的坐标系转换
+dog2 单腿为 4-DoF 冗余构型：1 个 prismatic rail + 3 个旋转关节。
+本实现采用“参数化降维”策略：rail 位移作为外部前置调度量，在固定 rail 下求解 3R 逆解。
 """
 
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Any
 import logging
 import numpy as np
 from .leg_parameters import LegParameters
@@ -23,6 +22,47 @@ class KinematicsSolver:
     def __init__(self, leg_params: Dict[str, LegParameters]):
         self.leg_params = leg_params
         self.logger = logging.getLogger(__name__)
+
+        # 3-DoF 基线求解的正则化参数（可作为后续QP版本的先验）
+        self._rail_candidates = 17
+        self._dls_lambda = 2e-3
+        self._max_iterations = 100
+        self._position_tolerance = 5e-3
+        self._rail_neutral_weight = 0.25
+        self._posture_weight = 0.08
+        self._smooth_weight = 0.06
+
+        # FK 标定站立姿态（q = [haa, hfe, kfe]）
+        self._standing_angles = {
+            'lf': np.array([0.0, 0.3000, -0.5000]),
+            'lh': np.array([0.0, 0.3000, -0.5000]),
+            'rh': np.array([0.0, 0.3000, -0.5000]),
+            'rf': np.array([0.0, 0.3000, -0.5000]),
+        }
+
+        # 每条腿最近一次有效解，用于连续性正则
+        self._last_solution: Dict[str, Tuple[float, np.ndarray]] = {}
+
+    def configure_regularization(self, cfg: Dict[str, Any]) -> None:
+        """配置IK正则化参数（缺失字段保持现值）。"""
+        self._rail_candidates = max(1, int(cfg.get('rail_candidates', self._rail_candidates)))
+        self._dls_lambda = max(1e-9, float(cfg.get('dls_lambda', self._dls_lambda)))
+        self._max_iterations = max(1, int(cfg.get('max_iterations', self._max_iterations)))
+        self._position_tolerance = max(1e-6, float(cfg.get('position_tolerance', self._position_tolerance)))
+        self._rail_neutral_weight = max(0.0, float(cfg.get('rail_neutral_weight', self._rail_neutral_weight)))
+        self._posture_weight = max(0.0, float(cfg.get('posture_weight', self._posture_weight)))
+        self._smooth_weight = max(0.0, float(cfg.get('smooth_weight', self._smooth_weight)))
+
+        self.logger.info(
+            "IK regularization updated: rails=%d dls=%.4g iter=%d tol=%.4g w_rail=%.4g w_posture=%.4g w_smooth=%.4g",
+            self._rail_candidates,
+            self._dls_lambda,
+            self._max_iterations,
+            self._position_tolerance,
+            self._rail_neutral_weight,
+            self._posture_weight,
+            self._smooth_weight,
+        )
 
     def _rotation_matrix_from_rpy(self, roll: float, pitch: float, yaw: float) -> np.ndarray:
         """从RPY角度创建旋转矩阵。"""
@@ -78,29 +118,30 @@ class KinematicsSolver:
 
     def _forward_local(self, params: LegParameters, s_m: float, q: np.ndarray) -> np.ndarray:
         """在腿局部坐标系中计算脚点位置。"""
-        theta_haa, theta_hfe, theta_kfe = q
+        hip_roll_rad, hip_pitch_rad, knee_pitch_rad = q
 
-        # rail_joint: prismatic along local X
-        T = self._homogeneous(np.eye(3), np.array([s_m, 0.0, 0.0]))
+        rail_translation_axis = np.array([1.0, 0.0, 0.0])
+        T = self._homogeneous(np.eye(3), rail_translation_axis * float(s_m))
 
         # coxa_joint origin and rotation（完全由参数提供，不做腿别硬编码）
+        joint_axis = np.array([-1.0, 0.0, 0.0])
         T = T @ self._homogeneous(self._rotation_matrix_from_rpy(*params.hip_rpy), params.hip_offset)
-        T = T @ self._homogeneous(self._rot_axis_angle(np.array([-1.0, 0.0, 0.0]), theta_haa), np.zeros(3))
+        T = T @ self._homogeneous(self._rot_axis_angle(joint_axis, hip_roll_rad), np.zeros(3))
 
         # femur_joint origin and rotation
         T = T @ self._homogeneous(self._rotation_matrix_from_rpy(*params.knee_rpy), params.knee_offset)
-        T = T @ self._homogeneous(self._rot_axis_angle(np.array([-1.0, 0.0, 0.0]), theta_hfe), np.zeros(3))
+        T = T @ self._homogeneous(self._rot_axis_angle(joint_axis, hip_pitch_rad), np.zeros(3))
 
         # tibia_joint origin and rotation
         T = T @ self._homogeneous(self._rotation_matrix_from_rpy(*params.tibia_rpy), params.tibia_offset)
-        T = T @ self._homogeneous(self._rot_axis_angle(np.array([-1.0, 0.0, 0.0]), theta_kfe), np.zeros(3))
+        T = T @ self._homogeneous(self._rot_axis_angle(joint_axis, knee_pitch_rad), np.zeros(3))
 
         # 脚端 = tibia_joint 坐标系中的 shin_xyz 偏移（tibia_link 接触代理位置）
         shin = np.asarray(params.shin_xyz)
         p = T @ np.array([shin[0], shin[1], shin[2], 1.0])
         return p[:3]
 
-    def _check_joint_limits(self, leg_id: str, theta_haa: float, theta_hfe: float, theta_kfe: float) -> bool:
+    def _check_joint_limits(self, leg_id: str, hip_roll_rad: float, hip_pitch_rad: float, knee_pitch_rad: float) -> bool:
         params = self.leg_params[leg_id]
         limits = params.joint_limits
 
@@ -108,56 +149,39 @@ class KinematicsSolver:
         femur_min, femur_max = limits['femur']
         tibia_min, tibia_max = limits['tibia']
 
-        if theta_haa < coxa_min or theta_haa > coxa_max:
+        if hip_roll_rad < coxa_min or hip_roll_rad > coxa_max:
             return False
-        if theta_hfe < femur_min or theta_hfe > femur_max:
+        if hip_pitch_rad < femur_min or hip_pitch_rad > femur_max:
             return False
-        if theta_kfe < tibia_min or theta_kfe > tibia_max:
+        if knee_pitch_rad < tibia_min or knee_pitch_rad > tibia_max:
             return False
         return True
 
-    def solve_ik(
-        self,
-        leg_id: str,
-        foot_pos: Tuple[float, float, float],
-        rail_offset: float = 0.0
-    ) -> Optional[Tuple[float, float, float, float]]:
-        """
-        求解逆运动学（数值法）。
+    def _compute_local_jacobian(self, params: LegParameters, s_m: float, q: np.ndarray) -> np.ndarray:
+        """数值计算3-DoF旋转关节的局部雅可比。"""
+        cur = self._forward_local(params, s_m, q)
+        finite_difference_step = 1e-6
+        J = np.zeros((3, 3))
+        for i in range(3):
+            dq = np.zeros(3)
+            dq[i] = finite_difference_step
+            p2 = self._forward_local(params, s_m, q + dq)
+            J[:, i] = (p2 - cur) / finite_difference_step
+        return J
 
-        Returns:
-            (s_m, theta_haa, theta_hfe, theta_kfe) 或 None
-        """
-        params = self.leg_params[leg_id]
-        s_m = rail_offset
+    def _build_initial_guesses(self, leg_id: str) -> Tuple[np.ndarray, ...]:
+        """构建3R迭代初值集合，优先站立姿态和上一帧姿态。"""
+        seeds = []
+        if leg_id in self._last_solution:
+            seeds.append(self._last_solution[leg_id][1].copy())
 
-        rail_min, rail_max = params.joint_limits['rail']
-        if s_m < rail_min or s_m > rail_max:
-            return None
-
-        target_local = self._transform_to_leg_frame(np.array(foot_pos), leg_id)
-
-        # FK 标定的站立角度（index 0 = 主初始猜测值）
-        # 通过 calibrate_standing_pose.py 扫描 (hfe, kfe) 空间得到，
-        # 满足脚端 z = -0.13 m (±5mm)，hfe > 0，kfe < 0
-        # Requirements: 2.1, 2.2
-        _STANDING_ANGLES = {
-            'lf': np.array([0.0, 0.3000, -0.5000]),
-            'lh': np.array([0.0, 0.3000, -0.5000]),
-            'rh': np.array([0.0, 0.3000, -0.5000]),
-            'rf': np.array([0.0, 0.3000, -0.5000]),
-        }
-
-        initial_guesses = [
-            # index 0: FK 标定的站立角度（主初始猜测值）
-            _STANDING_ANGLES[leg_id],
-            # 原有中等弯曲初值（备用）
+        seeds.append(self._standing_angles[leg_id].copy())
+        seeds.extend([
             np.array([0.0, 0.7, -1.2]),
             np.array([0.0, 0.5, -1.0]),
             np.array([0.0, 1.0, -1.4]),
             np.array([0.3, 0.7, -1.0]),
             np.array([-0.3, 0.7, -1.0]),
-            # 新增深蹲初值，提升低高度目标收敛率
             np.array([0.0, 1.3, -2.3]),
             np.array([0.0, 1.5, -2.5]),
             np.array([0.0, 1.6, -2.6]),
@@ -165,62 +189,155 @@ class KinematicsSolver:
             np.array([-0.3, 1.4, -2.4]),
             np.array([0.6, 1.5, -2.5]),
             np.array([-0.6, 1.5, -2.5]),
-        ]
+        ])
+        return tuple(seeds)
 
-        best_q = None
-        best_err = float('inf')
-        best_seed = None
+    def _solve_3r_with_fixed_rail(
+        self,
+        leg_id: str,
+        params: LegParameters,
+        target_local: np.ndarray,
+        s_m: float,
+        q_ref: np.ndarray,
+    ) -> Tuple[Optional[np.ndarray], float, Optional[np.ndarray]]:
+        """在固定导轨位移下求解3R逆运动学（DLS + 正则）。"""
+        rail_min, rail_max = params.joint_limits['rail']
+        if s_m < rail_min or s_m > rail_max:
+            return None, float('inf'), None
 
-        for q0 in initial_guesses:
+        best_q_local = None
+        best_err_local = float('inf')
+        best_seed_local = None
+
+        for q0 in self._build_initial_guesses(leg_id):
             q = q0.copy()
-            for _ in range(80):
+            for _ in range(self._max_iterations):
                 cur = self._forward_local(params, s_m, q)
                 err_vec = target_local - cur
                 err = float(np.linalg.norm(err_vec))
-                if err < 1e-4:
-                    if self._check_joint_limits(leg_id, q[0], q[1], q[2]):
-                        return (s_m, float(q[0]), float(q[1]), float(q[2]))
+                if err < self._position_tolerance and self._check_joint_limits(leg_id, q[0], q[1], q[2]):
                     break
 
-                eps = 1e-6
-                J = np.zeros((3, 3))
-                for i in range(3):
-                    dq = np.zeros(3)
-                    dq[i] = eps
-                    p2 = self._forward_local(params, s_m, q + dq)
-                    J[:, i] = (p2 - cur) / eps
-
-                # Damped Least Squares
-                lam = 1e-3
+                J = self._compute_local_jacobian(params, s_m, q)
                 JT = J.T
-                H = JT @ J + lam * np.eye(3)
+                H = JT @ J + self._dls_lambda * np.eye(3) + self._posture_weight * np.eye(3)
+                g = JT @ err_vec + self._posture_weight * (q_ref - q)
                 try:
-                    dq = np.linalg.solve(H, JT @ err_vec)
+                    dq = np.linalg.solve(H, g)
                 except np.linalg.LinAlgError:
                     break
 
                 dq = np.clip(dq, -0.2, 0.2)
                 q = q + dq
 
-                # 软限位夹紧，避免发散
                 limits = params.joint_limits
                 q[0] = np.clip(q[0], limits['coxa'][0], limits['coxa'][1])
                 q[1] = np.clip(q[1], limits['femur'][0], limits['femur'][1])
                 q[2] = np.clip(q[2], limits['tibia'][0], limits['tibia'][1])
 
             final_err = float(np.linalg.norm(target_local - self._forward_local(params, s_m, q)))
-            if final_err < best_err and self._check_joint_limits(leg_id, q[0], q[1], q[2]):
-                best_err = final_err
-                best_q = q.copy()
-                best_seed = q0.copy()
+            if final_err < best_err_local and self._check_joint_limits(leg_id, q[0], q[1], q[2]):
+                best_err_local = final_err
+                best_q_local = q.copy()
+                best_seed_local = q0.copy()
 
-        if best_q is not None and best_err < 5e-3:
-            return (s_m, float(best_q[0]), float(best_q[1]), float(best_q[2]))
+        return best_q_local, best_err_local, best_seed_local
+
+    def _rail_regularization_cost(
+        self,
+        leg_id: str,
+        params: LegParameters,
+        s_m: float,
+        q: np.ndarray,
+        q_ref: np.ndarray,
+    ) -> float:
+        """导轨参数化代价：中位偏置 + 姿态偏差 + 连续性。"""
+        rail_min, rail_max = params.joint_limits['rail']
+        rail_mid = 0.5 * (rail_min + rail_max)
+        rail_span = max(rail_max - rail_min, 1e-6)
+        rail_norm = (s_m - rail_mid) / rail_span
+
+        posture_err = q - q_ref
+        cost = self._rail_neutral_weight * (rail_norm ** 2)
+        cost += self._posture_weight * float(posture_err @ posture_err)
+
+        if leg_id in self._last_solution:
+            last_s, last_q = self._last_solution[leg_id]
+            ds = (s_m - last_s) / rail_span
+            dq = q - last_q
+            cost += self._smooth_weight * (ds ** 2 + float(dq @ dq))
+
+        return float(cost)
+
+    def solve_ik(
+        self,
+        leg_id: str,
+        foot_pos: Tuple[float, float, float],
+        rail_offset: Optional[float] = None
+    ) -> Optional[Tuple[float, float, float, float]]:
+        """求解 IK（rail 参数化降维 + 固定 rail 的 3R-DLS）。
+
+        Args:
+            leg_id: lf/lh/rh/rf
+            foot_pos: base_link 下脚端目标 (x, y, z)
+            rail_offset: rail 位移调度量（m）。若为 None，则在 rail 范围内做离散搜索。
+
+        Returns:
+            (rail_m, hip_roll_rad, hip_pitch_rad, knee_pitch_rad) 或 None
+        """
+        params = self.leg_params[leg_id]
+        rail_min, rail_max = params.joint_limits['rail']
+        target_local = self._transform_to_leg_frame(np.array(foot_pos), leg_id)
+        q_ref = self._standing_angles[leg_id]
+
+        if not np.all(np.isfinite(target_local)):
+            return None
+        reach = float(params.link_lengths[1] + params.link_lengths[2])
+        max_dist = reach + 1.0
+        if float(np.linalg.norm(target_local)) > max_dist:
+            return None
+
+        if rail_offset is not None:
+            rail_candidates = [float(np.clip(rail_offset, rail_min, rail_max))]
+        else:
+            rail_candidates = np.linspace(rail_min, rail_max, self._rail_candidates).tolist()
+            if leg_id in self._last_solution:
+                rail_candidates.append(float(np.clip(self._last_solution[leg_id][0], rail_min, rail_max)))
+
+        best_q = None
+        best_err = float('inf')
+        best_seed = None
+        best_s = 0.0
+        best_total_cost = float('inf')
+
+        for s in rail_candidates:
+            q_candidate, err_candidate, seed_candidate = self._solve_3r_with_fixed_rail(
+                leg_id=leg_id,
+                params=params,
+                target_local=target_local,
+                s_m=float(s),
+                q_ref=q_ref,
+            )
+            if q_candidate is None:
+                continue
+
+            reg_cost = self._rail_regularization_cost(leg_id, params, float(s), q_candidate, q_ref)
+            total_cost = err_candidate + reg_cost
+            if total_cost < best_total_cost:
+                best_total_cost = total_cost
+                best_q = q_candidate
+                best_err = err_candidate
+                best_seed = seed_candidate
+                best_s = float(s)
+
+        if best_q is not None and best_err < self._position_tolerance:
+            self._last_solution[leg_id] = (best_s, best_q.copy())
+            return (best_s, float(best_q[0]), float(best_q[1]), float(best_q[2]))
 
         self.logger.warning(
             "IK failed leg=%s rail=%.4f target_local=%s best_err=%.6f best_q=%s best_seed=%s",
             leg_id,
-            s_m,
+            best_s,
             np.array2string(target_local, precision=5, suppress_small=True),
             best_err,
             None if best_q is None else np.array2string(best_q, precision=5, suppress_small=True),
@@ -236,12 +353,12 @@ class KinematicsSolver:
     ) -> Tuple[float, float, float]:
         """求解正运动学。"""
         params = self.leg_params[leg_id]
-        s_m, theta_haa_rad, theta_hfe_rad, theta_kfe_rad = joint_positions
+        rail_m, hip_roll_rad, hip_pitch_rad, knee_pitch_rad = joint_positions
 
         pos_local = self._forward_local(
             params,
-            s_m,
-            np.array([theta_haa_rad, theta_hfe_rad, theta_kfe_rad])
+            rail_m,
+            np.array([hip_roll_rad, hip_pitch_rad, knee_pitch_rad])
         )
         pos_global = self._transform_from_leg_frame(pos_local, leg_id)
         return (float(pos_global[0]), float(pos_global[1]), float(pos_global[2]))
@@ -253,41 +370,6 @@ def create_kinematics_solver() -> KinematicsSolver:
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-
-    solver = create_kinematics_solver()
-
-    # 仅用于离线快速验证，不依赖ROS节点
-    from .gait_generator import GaitConfig, GaitGenerator
-
-    gait = GaitGenerator(GaitConfig())
-    gait.update(0.0, (0.0, 0.0, 0.0))  # 静止工况
-
-    test_legs = ['lf', 'rf', 'lh', 'rh']
-    fk_seed = (0.0, 0.0, 0.7, -1.4)
-
-    print("\n=== IK离线验证：FK->IK Ground Truth ===")
-    for leg_id in test_legs:
-        fk_target = solver.solve_fk(leg_id, fk_seed)
-        ik_res = solver.solve_ik(leg_id, fk_target)
-
-        if ik_res is None:
-            print(f"[{leg_id}] FK->IK: FAIL target={fk_target}")
-            continue
-
-        fk_back = solver.solve_fk(leg_id, ik_res)
-        err = float(np.linalg.norm(np.array(fk_back) - np.array(fk_target)))
-        print(f"[{leg_id}] FK->IK: OK err={err:.6e} ik={ik_res}")
-
-    print("\n=== IK离线验证：Gait nominal target ===")
-    for leg_id in test_legs:
-        nominal_target = gait.get_foot_target(leg_id)
-        ik_res = solver.solve_ik(leg_id, nominal_target)
-
-        if ik_res is None:
-            print(f"[{leg_id}] nominal: FAIL target={nominal_target}")
-            continue
-
-        fk_back = solver.solve_fk(leg_id, ik_res)
-        err = float(np.linalg.norm(np.array(fk_back) - np.array(nominal_target)))
-        print(f"[{leg_id}] nominal: OK err={err:.6e} ik={ik_res}")
+    raise SystemExit(
+        "kinematics_solver.py is a library module; run package tests for validation."
+    )

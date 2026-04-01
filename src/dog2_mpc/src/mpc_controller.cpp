@@ -38,6 +38,8 @@ MPCController::MPCController(double mass,
     u_predicted_.resize(params_.horizon, Eigen::VectorXd::Zero(12));
     
     initialized_ = true;
+
+    current_slack_weight_ = 1e5;  // 默认 exact penalty 权重（可由 Node 运行时调整）
     
     std::cout << "[MPCController] 16维扩展MPC初始化完成，包含滑动副约束" << std::endl;
 }
@@ -71,6 +73,20 @@ void MPCController::setBaseFootPositions(const Eigen::MatrixXd& foot_positions) 
 void MPCController::setSlidingVelocity(const Eigen::Vector4d& sliding_velocity) {
     sliding_velocity_ = sliding_velocity;
     extended_srbd_model_->setSlidingVelocity(sliding_velocity);
+}
+
+void MPCController::setCrossingGuardParams(double rail_tracking_error_threshold,
+                                          double support_polygon_margin_threshold,
+                                          double transition_stable_time) {
+    if (crossing_state_machine_) {
+        crossing_state_machine_->setRailTrackingErrorThreshold(rail_tracking_error_threshold);
+        crossing_state_machine_->setSupportPolygonMarginThreshold(support_polygon_margin_threshold);
+        crossing_state_machine_->setTransitionStableTime(transition_stable_time);
+    }
+}
+
+void MPCController::setSlackLinearWeight(double slack_linear_weight) {
+    current_slack_weight_ = slack_linear_weight;
 }
 
 bool MPCController::solve(const Eigen::VectorXd& x0, Eigen::VectorXd& u_optimal) {
@@ -187,9 +203,20 @@ void MPCController::buildQP(const Eigen::VectorXd& x0,
     const int N = params_.horizon;
     const int nx = 16;  // 扩展状态维度：SRBD(12) + 滑动副(4)
     const int nu = 12;  // 控制维度不变
+
+    // 仅在 crossing 模式下，把滑动副 rail 边界做真正的 soft bound：
+    //   引入上下界松弛变量：
+    //     d_i + s_lower(k,i) >= d_min(i)
+    //     d_i - s_upper(k,i) <= d_max(i)
+    //   并在目标函数中对 slack 做 exact penalty（q 一次项 + P 二次项）
+    const bool use_soft_rail_bounds = crossing_enabled_ && crossing_state_machine_ &&
+                                       params_.enable_sliding_constraints;
+    const int num_rail_slack = use_soft_rail_bounds ? 8 : 0;  // 4 lower + 4 upper
     
     // 优化变量: z = [x_1, u_0, x_2, u_1, ..., x_N, u_{N-1}]
-    const int nv = N * (nx + nu);  // 总变量数：N*(16+12) = N*28
+    const int nv_base = N * (nx + nu);
+    const int nv = nv_base + (use_soft_rail_bounds ? N * num_rail_slack : 0);
+    const int rail_slack_base = nv_base;
     
     std::cout << "[MPC] 构建16维QP问题: N=" << N << ", nx=" << nx << ", nu=" << nu << ", nv=" << nv << std::endl;
     
@@ -214,6 +241,22 @@ void MPCController::buildQP(const Eigen::VectorXd& x0,
                 u_offset + i, u_offset + i, params_.R(i, i)));
         }
     }
+
+    // slack cost for soft rail bounds
+    if (use_soft_rail_bounds) {
+        const double slack_quadratic_weight = 1e4;  // 二次项（保持数值稳定）
+        for (int k = 0; k < N; ++k) {
+            for (int i = 0; i < 4; ++i) {
+                const int s_lower_idx = rail_slack_base + k * 4 + i;
+                const int s_upper_idx = rail_slack_base + N * 4 + k * 4 + i;
+
+                P_triplets.push_back(Eigen::Triplet<double>(
+                    s_lower_idx, s_lower_idx, slack_quadratic_weight));
+                P_triplets.push_back(Eigen::Triplet<double>(
+                    s_upper_idx, s_upper_idx, slack_quadratic_weight));
+            }
+        }
+    }
     
     P.resize(nv, nv);
     P.setFromTriplets(P_triplets.begin(), P_triplets.end());
@@ -221,6 +264,18 @@ void MPCController::buildQP(const Eigen::VectorXd& x0,
     // 2. 构建线性项 q
     q.resize(nv);
     q.setZero();
+
+    // exact penalty：在线性项 q 中加入强惩罚，保证 slack s->0 时也有非零导数
+    if (use_soft_rail_bounds) {
+        for (int k = 0; k < N; ++k) {
+            for (int i = 0; i < 4; ++i) {
+                const int s_lower_idx = rail_slack_base + k * 4 + i;
+                const int s_upper_idx = rail_slack_base + N * 4 + k * 4 + i;
+                q(s_lower_idx) = current_slack_weight_;
+                q(s_upper_idx) = current_slack_weight_;
+            }
+        }
+    }
     
     for (int k = 0; k < N; ++k) {
         int x_offset = k * (nx + nu);  // x_{k+1}的位置
@@ -246,6 +301,11 @@ void MPCController::buildQP(const Eigen::VectorXd& x0,
     // 3.2 滑动副约束（不等式约束）
     if (params_.enable_sliding_constraints) {
         addSlidingConstraints(A_triplets, l_vec, u_vec);
+    }
+
+    // 3.2.1 rail+window 碰撞约束（不等式约束）
+    if (params_.enable_boundary_constraints) {
+        addRailWindowConstraints(A_triplets, l_vec, u_vec);
     }
     
     // 3.3 控制约束（不等式约束）
@@ -445,22 +505,50 @@ void MPCController::updateCrossingState(const Eigen::VectorXd& x0) {
     robot_state.orientation = x0.segment<3>(3);
     robot_state.angular_velocity = x0.segment<3>(9);
     
-    // 滑动副状态（需要从其他地方获取，这里暂时设为零）
-    robot_state.sliding_positions.setZero();
-    robot_state.sliding_velocities.setZero();
-    
-    // 腿部构型（需要从其他地方获取，这里暂时设为肘式）
+    // 滑动副状态：16D 扩展状态中滑动副位置在 [12..15]
+    robot_state.sliding_positions = ExtendedSRBDModel::extractSlidingPositions(x0);
+    robot_state.sliding_velocities = sliding_velocity_;
+
+    // 腿部构型：为了闭环状态机 completion guards，使用当前 stage 的“期望构型”填充 leg_configs
+    // （这样 guard 不会因为 leg_configs 未同步而永远无法触发）
+    const auto stage = crossing_state_machine_->getCurrentState();
     for (int i = 0; i < 4; ++i) {
-        robot_state.leg_configs[i] = CrossingStateMachine::LegConfiguration::ELBOW;
+        bool is_front_leg = (i == 0 || i == 3);
+
+        switch (stage) {
+            case CrossingStateMachine::CrossingState::FRONT_LEGS_TRANSIT:
+            case CrossingStateMachine::CrossingState::HYBRID_GAIT_WALKING:
+            case CrossingStateMachine::CrossingState::RAIL_ALIGNMENT:
+                robot_state.leg_configs[i] = is_front_leg
+                    ? CrossingStateMachine::LegConfiguration::KNEE
+                    : CrossingStateMachine::LegConfiguration::ELBOW;
+                break;
+            case CrossingStateMachine::CrossingState::REAR_LEGS_TRANSIT:
+            case CrossingStateMachine::CrossingState::ALL_KNEE_STATE:
+                // 前后腿都切到膝式（与 computeRearLegsTransitTarget/computeAllKneeStateTarget 保持一致）
+                robot_state.leg_configs[i] = CrossingStateMachine::LegConfiguration::KNEE;
+                break;
+            case CrossingStateMachine::CrossingState::RECOVERY:
+            case CrossingStateMachine::CrossingState::CONTINUE_FORWARD:
+            case CrossingStateMachine::CrossingState::COMPLETED:
+                robot_state.leg_configs[i] = CrossingStateMachine::LegConfiguration::ELBOW;
+                break;
+            default:
+                robot_state.leg_configs[i] = CrossingStateMachine::LegConfiguration::ELBOW;
+                break;
+        }
         robot_state.foot_contacts[i] = true;
     }
-    
-    // 足端位置（从foot_positions_获取）
+
+    // 足端位置：CrossingStateMachine 的 foot_positions 被当作世界系量使用（用于与 window.x_position 比较）
+    // SRBD/ExtendedSRBDModel 的 base_foot_positions_ 在这里视为“相对 CoM”的向量，因此需要加上 CoM 世界位姿。
+    Eigen::MatrixXd rel_foot_positions = extended_srbd_model_->computeFootPositions(
+        robot_state.sliding_positions, base_foot_positions_);
     for (int i = 0; i < 4; ++i) {
-        if (base_foot_positions_.rows() >= 4 && base_foot_positions_.cols() >= 3) {
-            robot_state.foot_positions[i] = base_foot_positions_.row(i);
+        if (rel_foot_positions.rows() >= 4 && rel_foot_positions.cols() >= 3) {
+            robot_state.foot_positions[i] = robot_state.position + rel_foot_positions.row(i).transpose();
         } else {
-            robot_state.foot_positions[i].setZero();
+            robot_state.foot_positions[i] = robot_state.position;
         }
     }
     
@@ -547,26 +635,90 @@ void MPCController::addSlidingConstraints(std::vector<Eigen::Triplet<double>>& A
     const int nu = 12;
     const int sliding_start_idx = 12;  // 滑动副在状态向量中的起始索引
     
-    // 获取滑动副限位
+    // 获取滑动副限位（如果越障开启则使用 CrossingStateMachine 的 stage-specific constraints）
     Eigen::Vector4d d_min, d_max;
-    d_min << -0.111, -0.008, -0.008, -0.111;  // j1, j2, j3, j4
-    d_max << 0.008, 0.111, 0.111, 0.008;
-    
-    double v_slide_max = 1.0;  // 最大速度 1 m/s
+    Eigen::Vector4d v_slide_max_vec;
+    if (crossing_enabled_ && crossing_state_machine_) {
+        const auto stage_constraints = crossing_state_machine_->getCurrentConstraints();
+        d_min = stage_constraints.sliding_min;
+        d_max = stage_constraints.sliding_max;
+        v_slide_max_vec = stage_constraints.sliding_vel_max;
+    } else {
+        d_min << -0.111, -0.008, -0.008, -0.111;  // j1, j2, j3, j4
+        d_max << 0.008, 0.111, 0.111, 0.008;
+        v_slide_max_vec.setConstant(1.0);  // 最大速度 1 m/s
+    }
     double epsilon_sym = 0.02;  // 对称容差 2cm
     double coord_tolerance = 0.05;  // 协调容差 5cm
     
     int n_constraints_added = 0;
-    
-    // 1. 位置限位约束：d_min[i] <= d_i <= d_max[i]
+
+    // 1. rail 位置约束（真正 soft bound：slack variable + cost）
+    //   - crossing 模式下：引入 s(k,i) >= 0
+    //     d_i + s_i >= d_min
+    //     d_i - s_i <= d_max
+    //   - 非 crossing：直接硬约束
+    const bool use_soft_rail_bounds = crossing_enabled_ && crossing_state_machine_;
+    const int nv_base = N * (nx + nu);
+    const int slack_lower_base = nv_base;       // s_lower 放在末尾
+    const int slack_upper_base = nv_base + N * 4;  // s_upper 在 s_lower 后面
+    const double BIG = 1e3;
+    const double osqp_infty = 1e20;  // slack 非负上界（近似无穷）
+
     for (int k = 0; k < N; ++k) {
         for (int i = 0; i < 4; ++i) {
-            int var_idx = k * (nx + nu) + sliding_start_idx + i;  // 滑动副d_i在优化变量中的索引
-            
-            A_triplets.push_back(Eigen::Triplet<double>(l_vec.size(), var_idx, 1.0));
-            l_vec.push_back(d_min(i));
-            u_vec.push_back(d_max(i));
-            n_constraints_added++;
+            const int d_var_idx = k * (nx + nu) + sliding_start_idx + i;
+
+            if (!use_soft_rail_bounds) {
+                // 硬约束：d_min <= d_i <= d_max
+                A_triplets.push_back(Eigen::Triplet<double>(l_vec.size(), d_var_idx, 1.0));
+                l_vec.push_back(d_min(i));
+                u_vec.push_back(d_max(i));
+                n_constraints_added++;
+                continue;
+            }
+
+            // 两个解耦 slack：下界松弛 / 上界松弛
+            const int s_lower_var_idx = slack_lower_base + k * 4 + i;
+            const int s_upper_var_idx = slack_upper_base + k * 4 + i;
+
+            // slack lower: s_lower in [0, OSQP_INFTY]
+            {
+                const int row = l_vec.size();
+                A_triplets.push_back(Eigen::Triplet<double>(row, s_lower_var_idx, 1.0));
+                l_vec.push_back(0.0);
+                u_vec.push_back(osqp_infty);
+                n_constraints_added++;
+            }
+
+            // slack upper: s_upper in [0, OSQP_INFTY]
+            {
+                const int row = l_vec.size();
+                A_triplets.push_back(Eigen::Triplet<double>(row, s_upper_var_idx, 1.0));
+                l_vec.push_back(0.0);
+                u_vec.push_back(osqp_infty);
+                n_constraints_added++;
+            }
+
+            // lower: d_i + s_lower >= d_min
+            {
+                const int row = l_vec.size();
+                A_triplets.push_back(Eigen::Triplet<double>(row, d_var_idx, 1.0));
+                A_triplets.push_back(Eigen::Triplet<double>(row, s_lower_var_idx, 1.0));
+                l_vec.push_back(d_min(i));
+                u_vec.push_back(BIG);
+                n_constraints_added++;
+            }
+
+            // upper: d_i - s_upper <= d_max
+            {
+                const int row = l_vec.size();
+                A_triplets.push_back(Eigen::Triplet<double>(row, d_var_idx, 1.0));
+                A_triplets.push_back(Eigen::Triplet<double>(row, s_upper_var_idx, -1.0));
+                l_vec.push_back(-BIG);
+                u_vec.push_back(d_max(i));
+                n_constraints_added++;
+            }
         }
     }
     
@@ -579,6 +731,7 @@ void MPCController::addSlidingConstraints(std::vector<Eigen::Triplet<double>>& A
             // d[k+1] - d[k]
             A_triplets.push_back(Eigen::Triplet<double>(l_vec.size(), var_idx_k1, 1.0));
             A_triplets.push_back(Eigen::Triplet<double>(l_vec.size(), var_idx_k, -1.0));
+            const double v_slide_max = v_slide_max_vec(i);
             l_vec.push_back(-v_slide_max * params_.dt);
             u_vec.push_back(v_slide_max * params_.dt);
             n_constraints_added++;
@@ -624,6 +777,100 @@ void MPCController::addSlidingConstraints(std::vector<Eigen::Triplet<double>>& A
     }
     
     std::cout << "[MPC] 滑动副约束已添加: " << n_constraints_added << "个约束" << std::endl;
+}
+
+void MPCController::addRailWindowConstraints(std::vector<Eigen::Triplet<double>>& A_triplets,
+                                            std::vector<double>& l_vec,
+                                            std::vector<double>& u_vec) {
+    if (!crossing_enabled_ || !crossing_state_machine_) {
+        return;
+    }
+
+    const int N = params_.horizon;
+    const int nx = 16;  // 扩展状态维度
+    const int sliding_start_idx = 12;  // d1..d4 在状态向量中的起始索引
+
+    const auto stage = crossing_state_machine_->getCurrentState();
+    const auto window = crossing_state_machine_->getWindowObstacle();
+
+    // 足端/rail 近似：world_x_foot ~= x_CoM + base_foot_x + d_i
+    // 在越障跨越阶段，对部分腿施加“窗框平面”安全侧约束：
+    //   transiting legs:  x_foot >= x_window + d_safe
+    //   non-transiting legs: x_foot <= x_window - d_safe
+    const double x_window = window.x_position;
+    const double d_safe = window.safety_margin;
+    const double BIG = 10.0;  // 用大上下界避免 OSQP 处理无穷
+
+    // leg_mode:
+    // 0: none
+    // 1: GE (x >= x_window + d_safe)
+    // 2: GE (x >= x_window - d_safe)
+    // 3: LE (x <= x_window - d_safe)
+    std::array<int, 4> leg_mode{0, 0, 0, 0};
+    switch (stage) {
+        case CrossingStateMachine::CrossingState::FRONT_LEGS_TRANSIT:
+            leg_mode[0] = 1;
+            leg_mode[3] = 1;
+            leg_mode[1] = 3;
+            leg_mode[2] = 3;
+            break;
+        case CrossingStateMachine::CrossingState::HYBRID_GAIT_WALKING:
+            // 前腿已穿过窗口平面，要求保持安全侧
+            leg_mode[0] = 1;
+            leg_mode[3] = 1;
+            break;
+        case CrossingStateMachine::CrossingState::REAR_LEGS_TRANSIT:
+            // 后腿穿越，front legs 保持不回落到左侧
+            leg_mode[1] = 1;
+            leg_mode[2] = 1;
+            leg_mode[0] = 2;
+            leg_mode[3] = 2;
+            break;
+        default:
+            return;  // 其他阶段不启用 rail-window 安全侧约束（避免引入不可行性）
+    }
+
+    int n_constraints_added = 0;
+    for (int k = 0; k < N; ++k) {
+        const int x_idx = k * nx + 0;  // x_CoM
+
+        for (int leg_i = 0; leg_i < 4; ++leg_i) {
+            if (leg_mode[leg_i] == 0) {
+                continue;
+            }
+
+            const int d_idx = k * nx + sliding_start_idx + leg_i;  // d_i
+
+            // row 对应到 A*x 的一行不等式约束 [l, u]
+            const int row = static_cast<int>(l_vec.size());
+
+            A_triplets.push_back(Eigen::Triplet<double>(row, x_idx, 1.0));
+            A_triplets.push_back(Eigen::Triplet<double>(row, d_idx, 1.0));
+
+            // base_foot_positions_ 被当作“相对 CoM 的相对足端向量”
+            double base_x = 0.0;
+            if (base_foot_positions_.rows() >= 4 && base_foot_positions_.cols() >= 1) {
+                base_x = base_foot_positions_(leg_i, 0);
+            }
+
+            double l_bound = -BIG;
+            double u_bound = BIG;
+
+            if (leg_mode[leg_i] == 1) {
+                l_bound = (x_window + d_safe) - base_x;
+            } else if (leg_mode[leg_i] == 2) {
+                l_bound = (x_window - d_safe) - base_x;
+            } else if (leg_mode[leg_i] == 3) {
+                u_bound = (x_window - d_safe) - base_x;
+            }
+
+            l_vec.push_back(l_bound);
+            u_vec.push_back(u_bound);
+            n_constraints_added++;
+        }
+    }
+
+    std::cout << "[MPC] rail+window 约束已添加: " << n_constraints_added << " 个约束" << std::endl;
 }
 
 void MPCController::addControlConstraints(std::vector<Eigen::Triplet<double>>& A_triplets,

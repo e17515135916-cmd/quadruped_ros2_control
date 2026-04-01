@@ -51,6 +51,10 @@ private:
         this->declare_parameter("control_frequency", 20.0);
         this->declare_parameter("enable_sliding_constraints", true);
         this->declare_parameter("mode", "hover");  // hover, walking, crossing
+        this->declare_parameter("slack_linear_weight", 1e5);
+        this->declare_parameter("rail_tracking_error_threshold", 0.005);
+        this->declare_parameter("support_polygon_margin_threshold", 0.015);
+        this->declare_parameter("crossing_transition_stable_time", 0.15);
         this->declare_parameter("default_stance_length", 0.40);
         this->declare_parameter("default_stance_width", 0.30);
         this->declare_parameter("nominal_body_height", 0.28);
@@ -108,6 +112,23 @@ private:
         
         // 创建控制器
         mpc_controller_ = std::make_unique<MPCController>(mass_, inertia, mpc_params);
+
+        // rail soft bound exact penalty 一次项权重（支持动态调参）
+        mpc_controller_->setSlackLinearWeight(
+            this->get_parameter("slack_linear_weight").as_double());
+
+        // 设置越障状态机 guard 参数（可通过 ROS2 参数服务器调节）
+        const double rail_tracking_error_threshold =
+            this->get_parameter("rail_tracking_error_threshold").as_double();
+        const double support_polygon_margin_threshold =
+            this->get_parameter("support_polygon_margin_threshold").as_double();
+        const double crossing_transition_stable_time =
+            this->get_parameter("crossing_transition_stable_time").as_double();
+        mpc_controller_->setCrossingGuardParams(
+            rail_tracking_error_threshold,
+            support_polygon_margin_threshold,
+            crossing_transition_stable_time);
+
         trajectory_generator_ = std::make_unique<TrajectoryGenerator>();
         contact_detector_ = std::make_unique<ContactDetector>();
         gait_generator_ = std::make_unique<HybridGaitGenerator>();
@@ -254,6 +275,10 @@ private:
                                "Waiting for state...");
             return;
         }
+
+        // 动态读取 exact penalty 一次项权重
+        mpc_controller_->setSlackLinearWeight(
+            this->get_parameter("slack_linear_weight").as_double());
         
         // 构建16维扩展状态
         Eigen::VectorXd extended_state(16);

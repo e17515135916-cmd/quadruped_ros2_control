@@ -1,37 +1,52 @@
 mpc_node:
   ros__parameters:
+    # dynamics
     mass: 11.8  # kg
+    # mpc_core
     horizon: 20  # steps
     dt: 0.05  # s
     control_frequency: 20.0  # Hz
+    # constraints
     enable_sliding_constraints: true
     enable_boundary_constraints: true
 
 mpc_node_16d:
   ros__parameters:
+    # dynamics
     mass: 11.8  # kg
+    # mpc_core
     horizon: 10  # steps
     dt: 0.05  # s
     control_frequency: 20.0  # Hz
+    # constraints
     enable_sliding_constraints: true
     enable_boundary_constraints: false
+    # safety_thresholds
     rail_tracking_error_threshold: 0.005  # m
     support_polygon_margin_threshold: 0.015  # m
     crossing_transition_stable_time: 0.15  # s
+    # mpc_weights
     slack_linear_weight: 100000.0  # exact-penalty linear term
 
 mpc_node_complete:
   ros__parameters:
+    # dynamics
     mass: 11.8  # kg
+    # mpc_core
     horizon: 10  # steps
     dt: 0.05  # s
     control_frequency: 20.0  # Hz
+    # mode
     mode: "hover"  # hover | walking | crossing
+    # constraints
     enable_sliding_constraints: true
+    # safety_thresholds
     rail_tracking_error_threshold: 0.005  # m
     support_polygon_margin_threshold: 0.015  # m
     crossing_transition_stable_time: 0.15  # s
+    # mpc_weights
     slack_linear_weight: 100000.0  # exact-penalty linear term
+    # nominal_pose
     default_stance_length: 0.40  # m
     default_stance_width: 0.30  # m
     nominal_body_height: 0.28  # m

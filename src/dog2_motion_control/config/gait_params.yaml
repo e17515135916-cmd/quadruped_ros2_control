@@ -3,9 +3,10 @@ spider_robot_controller:
   ros__parameters:
     # 蜘蛛机器人步态参数配置
     gait:
-      stride_length: 0.02
-      stride_height: 0.01
-      cycle_time: 1.5
+      stride_length: 0.06
+      stride_length_max: 0.08
+      stride_height: 0.03
+      cycle_time: 1.2
       duty_factor: 0.75
       body_height: 0.24
       gait_type: "crawl"
@@ -15,12 +16,40 @@ spider_robot_controller:
         leg2: 90.0
         leg3: 180.0
         leg4: 270.0
+      foot_landing_buffer:
+        enable: true
+        swing_phase_ratio: 0.1
+        poly_order: 5
+        target_landing_vel_z: 0.01
+
+    standing_pose:
+      lf:
+        rail_m: 0.0
+        hip_roll_rad: 0.0
+        hip_pitch_rad: 0.3
+        knee_pitch_rad: -0.5
+      lh:
+        rail_m: 0.0
+        hip_roll_rad: 0.0
+        hip_pitch_rad: 0.3
+        knee_pitch_rad: -0.5
+      rh:
+        rail_m: 0.0
+        hip_roll_rad: 0.0
+        hip_pitch_rad: 0.3
+        knee_pitch_rad: -0.5
+      rf:
+        rail_m: 0.0
+        hip_roll_rad: 0.0
+        hip_pitch_rad: 0.3
+        knee_pitch_rad: -0.5
     
     joint_limits:
       rail:
         min: -0.05
         max: 0.05
         locked_position: 0.0
+        # Deprecated: rail slip monitoring is handled in JointController via parameters.
         slip_threshold: 0.0005
       haa:
         min: -0.785
@@ -36,6 +65,8 @@ spider_robot_controller:
       frequency: 50.0
       max_joint_velocity: 2.0
       max_joint_acceleration: 5.0
+      # Limit rail command slew rate (m/s). At 50Hz, 0.15m/s -> 3mm per cycle.
+      max_rail_velocity: 0.15
       velocity_scale:
         linear_x: 1.0
         linear_y: 1.0
@@ -43,6 +74,15 @@ spider_robot_controller:
       smooth_stop:
         enabled: true
         deceleration_time: 1.0
+
+    ik_regularization:
+      rail_candidates: 17
+      dls_lambda: 0.001
+      max_iterations: 150
+      position_tolerance: 0.01
+      rail_neutral_weight: 0.05
+      posture_weight: 0.001
+      smooth_weight: 0.005
     
     stability:
       com_margin: 0.02

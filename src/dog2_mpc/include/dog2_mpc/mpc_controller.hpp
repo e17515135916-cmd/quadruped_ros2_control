@@ -87,6 +87,22 @@ public:
      * @param sliding_velocity 滑动副速度 [v1, v2, v3, v4] (m/s)
      */
     void setSlidingVelocity(const Eigen::Vector4d& sliding_velocity);
+
+    /**
+     * @brief 设置越障状态机 guard 参数（用于 stable transition / rail tracking / support polygon）
+     * @param rail_tracking_error_threshold rail tracking guard 阈值（单位：m）
+     * @param support_polygon_margin_threshold 支撑多边形 margin 阈值（单位：m）
+     * @param transition_stable_time stage transition 稳定保持时长（单位：s）
+     */
+    void setCrossingGuardParams(double rail_tracking_error_threshold,
+                                 double support_polygon_margin_threshold,
+                                 double transition_stable_time);
+
+    /**
+     * @brief 设置 rail soft bound 的 exact penalty 一次项权重
+     * @param slack_linear_weight 松弛变量惩罚权重（用于 q 向量）
+     */
+    void setSlackLinearWeight(double slack_linear_weight);
     
     /**
      * @brief 求解MPC优化问题（16维扩展版本）
@@ -239,6 +255,14 @@ private:
                               std::vector<double>& u_vec);
     
     /**
+     * @brief 添加 rail+window 线性化碰撞约束（16D：x_CoM + d_i 的不等式）
+     * @details 在越障跨越阶段，对部分腿的“世界系足端x/rail前端”施加窗框安全侧约束，避免穿越过程发生结构性碰撞。
+     */
+    void addRailWindowConstraints(std::vector<Eigen::Triplet<double>>& A_triplets,
+                                  std::vector<double>& l_vec,
+                                  std::vector<double>& u_vec);
+    
+    /**
      * @brief 线性化整个时域（16维扩展）
      * @param x0 初始扩展状态 (16维)
      */
@@ -269,6 +293,9 @@ private:
     
     // MPC参数
     Parameters params_;
+
+    // rail soft bound exact penalty 线性项权重
+    double current_slack_weight_;
     
     // 参考轨迹（16维扩展状态）
     std::vector<Eigen::VectorXd> x_ref_;

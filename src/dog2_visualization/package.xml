@@ -4,7 +4,7 @@
   <name>dog2_visualization</name>
   <version>0.1.0</version>
   <description>Visualization system for Dog2 quadruped robot including RViz2 markers, Gazebo enhancements, and real-time data plotting</description>
-  <maintainer email="dell@todo.todo">dell</maintainer>
+  <maintainer email="dev@example.com">Developer</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
