@@ -121,7 +121,7 @@ def _estimate_min_collision_z(robot_description_xml, pin_model, pin_data, urdf_d
     robot_root = ET.fromstring(robot_description_xml)
     mesh_vertices_cache = {}
     min_collision_z = None
-    collision_mesh_count = 0
+    collision_geom_count = 0
 
     for link in robot_root.findall("link"):
         link_name = link.attrib.get("name")
@@ -138,15 +138,6 @@ def _estimate_min_collision_z(robot_description_xml, pin_model, pin_data, urdf_d
             if geometry is None:
                 continue
 
-            mesh = geometry.find("mesh")
-            if mesh is None:
-                continue
-
-            mesh_path = _resolve_mesh_path(mesh.attrib.get("filename"), urdf_dir, package_share_cache)
-            mesh_vertices = _load_stl_vertices(mesh_path, mesh_vertices_cache)
-            mesh_scale = _parse_xyz_triplet(mesh.attrib.get("scale"), "1 1 1").reshape(1, 3)
-            scaled_vertices = mesh_vertices * mesh_scale
-
             collision_origin = collision.find("origin")
             collision_xyz = _parse_xyz_triplet(
                 collision_origin.attrib.get("xyz") if collision_origin is not None else None,
@@ -158,17 +149,53 @@ def _estimate_min_collision_z(robot_description_xml, pin_model, pin_data, urdf_d
             )
             collision_rotation = _rpy_to_matrix(collision_rpy)
 
-            world_vertices = (
-                link_rotation @ (collision_rotation @ scaled_vertices.T + collision_xyz) + link_translation
-            )
-            link_min_collision_z = float(np.min(world_vertices[2]))
+            mesh = geometry.find("mesh")
+            box = geometry.find("box")
+            sphere = geometry.find("sphere")
+
+            if mesh is not None:
+                mesh_path = _resolve_mesh_path(mesh.attrib.get("filename"), urdf_dir, package_share_cache)
+                mesh_vertices = _load_stl_vertices(mesh_path, mesh_vertices_cache)
+                mesh_scale = _parse_xyz_triplet(mesh.attrib.get("scale"), "1 1 1").reshape(1, 3)
+                scaled_vertices = mesh_vertices * mesh_scale
+                world_vertices = (
+                    link_rotation @ (collision_rotation @ scaled_vertices.T + collision_xyz) + link_translation
+                )
+                link_min_collision_z = float(np.min(world_vertices[2]))
+            elif box is not None:
+                sx, sy, sz = [float(v) for v in box.attrib.get("size", "0 0 0").split()]
+                hx, hy, hz = sx * 0.5, sy * 0.5, sz * 0.5
+                corners = np.array(
+                    [
+                        [-hx, -hy, -hz],
+                        [-hx, -hy, hz],
+                        [-hx, hy, -hz],
+                        [-hx, hy, hz],
+                        [hx, -hy, -hz],
+                        [hx, -hy, hz],
+                        [hx, hy, -hz],
+                        [hx, hy, hz],
+                    ],
+                    dtype=float,
+                ).T
+                world_vertices = link_rotation @ (collision_rotation @ corners + collision_xyz) + link_translation
+                link_min_collision_z = float(np.min(world_vertices[2]))
+            elif sphere is not None:
+                r = float(sphere.attrib.get("radius", "0"))
+                center_world = (link_rotation @ (collision_rotation @ np.zeros((3, 1)) + collision_xyz) + link_translation).reshape(
+                    3,
+                )
+                link_min_collision_z = float(center_world[2] - r)
+            else:
+                continue
+
             min_collision_z = (
                 link_min_collision_z if min_collision_z is None else min(min_collision_z, link_min_collision_z)
             )
-            collision_mesh_count += 1
+            collision_geom_count += 1
 
-    if collision_mesh_count == 0 or min_collision_z is None:
-        raise ValueError("No collision meshes found in expanded URDF")
+    if collision_geom_count == 0 or min_collision_z is None:
+        raise ValueError("No collision geometry (mesh/box/sphere) found in expanded URDF")
 
     return min_collision_z
 
@@ -267,6 +294,18 @@ def generate_launch_description():
         description="Model name used by pose->odom fallback node",
     )
 
+    gz_world_name_arg = DeclareLaunchArgument(
+        "gz_world_name",
+        default_value="empty",
+        description="Gazebo world 名（与 /world/<name>/... 话题一致，默认 empty.sdf）",
+    )
+
+    bridge_foot_contact_arg = DeclareLaunchArgument(
+        "bridge_foot_contact",
+        default_value="true",
+        description="是否桥接四足 foot_link 上 gz contact sensor 到 /dog2/foot_contact/*",
+    )
+
     def launch_setup(context):
         # === 关键 1：替换 controllers YAML 到 effort 模式 ===
         controllers_yaml = os.path.join(
@@ -282,6 +321,12 @@ def generate_launch_description():
         dynamic_pose_gz_topic = LaunchConfiguration("dynamic_pose_gz_topic").perform(context)
         dynamic_pose_ros_topic = LaunchConfiguration("dynamic_pose_ros_topic").perform(context)
         model_name = LaunchConfiguration("model_name").perform(context)
+        gz_world_name = LaunchConfiguration("gz_world_name").perform(context)
+        bridge_foot_contact = LaunchConfiguration("bridge_foot_contact").perform(context).lower() in (
+            "1",
+            "true",
+            "yes",
+        )
         config_file = LaunchConfiguration("config_file").perform(context)
         p_gain = float(LaunchConfiguration("p_gain").perform(context))
         spawn_z_margin = float(LaunchConfiguration("spawn_z_margin").perform(context))
@@ -592,9 +637,36 @@ def generate_launch_description():
                     "use_sim_time": LaunchConfiguration("use_sim_time"),
                     "debug_mode": True,
                     "odom_topic": odom_topic,
+                    "use_gz_foot_contact": bridge_foot_contact,
+                    "gz_contact_topic_lf": "/dog2/foot_contact/lf",
+                    "gz_contact_topic_lh": "/dog2/foot_contact/lh",
+                    "gz_contact_topic_rh": "/dog2/foot_contact/rh",
+                    "gz_contact_topic_rf": "/dog2/foot_contact/rf",
                 },
             ],
         )
+
+        foot_contact_bridges = []
+        if bridge_foot_contact:
+            for leg in ("lf", "lh", "rh", "rf"):
+                gz_topic = (
+                    f"/world/{gz_world_name}/model/{model_name}/link/{leg}_foot_link/"
+                    f"sensor/{leg}_foot_contact/contacts"
+                )
+                ros_topic = f"/dog2/foot_contact/{leg}"
+                foot_contact_bridges.append(
+                    Node(
+                        package="ros_gz_bridge",
+                        executable="parameter_bridge",
+                        arguments=[
+                            f"{gz_topic}@ros_gz_interfaces/msg/Contacts[gz.msgs.Contacts",
+                            "--ros-args",
+                            "-r",
+                            f"{gz_topic}:={ros_topic}",
+                        ],
+                        output="screen",
+                    )
+                )
 
         delayed_effort_controller = TimerAction(
             period=0.5,
@@ -630,6 +702,7 @@ def generate_launch_description():
             odom_bridge,
             dynamic_pose_bridge,
             robot_state_publisher,
+            *foot_contact_bridges,
             mpc_controller_node,
             spawn_entity,
             start_gain_setter_after_spawn,
@@ -654,6 +727,8 @@ def generate_launch_description():
             dynamic_pose_gz_topic_arg,
             dynamic_pose_ros_topic_arg,
             model_name_arg,
+            gz_world_name_arg,
+            bridge_foot_contact_arg,
             OpaqueFunction(function=launch_setup),
         ]
     )

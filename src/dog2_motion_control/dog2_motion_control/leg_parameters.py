@@ -96,10 +96,17 @@ def create_leg_parameters() -> Dict[str, LegParameters]:
 
     link_lengths = (L1, L2, L3)
 
-    # foot_tip in tibia_link frame: YZ 与 xacro 一致；X 为向机身横向收拢；Z 下调与 dog2.urdf.xacro foot_tip_z_down_m 一致
+    # foot_tip in tibia_link frame: YZ 与 xacro 一致；X 横向收拢；Y +半直径后 −1.5×直径（沿 −tibia Y）；Z 下调与 xacro 一致
     FOOT_TIP_LATERAL_INBOARD_M = 0.024
+    FOOT_SPHERE_RADIUS_M = 0.012
+    FOOT_TIP_PLUS_Y_HALF_DIAMETER_M = FOOT_SPHERE_RADIUS_M  # 半直径 = r（d=2r）
+    FOOT_TIP_MINUS_Y_ONE_AND_HALF_DIAMETER_M = 3.0 * FOOT_SPHERE_RADIUS_M  # 1.5×直径 = 3r
     # 沿 tibia_link Z 累计下调；较「2×3/4 d + 2 d」上调 3×球直径（与 xacro 一致）
-    FOOT_TIP_Z_DOWN_M = 2.0 * 0.75 * 2.0 * 0.012 + 2.0 * (2.0 * 0.012) - 3.0 * (2.0 * 0.012)
+    FOOT_TIP_Z_DOWN_M = (
+        2.0 * 0.75 * 2.0 * FOOT_SPHERE_RADIUS_M
+        + 2.0 * (2.0 * FOOT_SPHERE_RADIUS_M)
+        - 3.0 * (2.0 * FOOT_SPHERE_RADIUS_M)
+    )
 
     def _foot_tip_yz(sy: float, sz: float, length: float) -> np.ndarray:
         n = float(np.linalg.norm(np.array([sy, sz], dtype=float)))
@@ -107,12 +114,15 @@ def create_leg_parameters() -> Dict[str, LegParameters]:
 
     foot12 = _foot_tip_yz(-0.143524743603395, -0.0694046953395906, L3)
     foot12[0] = FOOT_TIP_LATERAL_INBOARD_M
+    foot12[1] += FOOT_TIP_PLUS_Y_HALF_DIAMETER_M - FOOT_TIP_MINUS_Y_ONE_AND_HALF_DIAMETER_M
     foot12[2] -= FOOT_TIP_Z_DOWN_M
     foot3 = _foot_tip_yz(-0.143524743603395, -0.0694046953395908, L3)
     foot3[0] = -FOOT_TIP_LATERAL_INBOARD_M
+    foot3[1] += FOOT_TIP_PLUS_Y_HALF_DIAMETER_M - FOOT_TIP_MINUS_Y_ONE_AND_HALF_DIAMETER_M
     foot3[2] -= FOOT_TIP_Z_DOWN_M
     foot4 = _foot_tip_yz(-0.1429895138560395, -0.0691152554666486, L3)
     foot4[0] = -FOOT_TIP_LATERAL_INBOARD_M
+    foot4[1] += FOOT_TIP_PLUS_Y_HALF_DIAMETER_M - FOOT_TIP_MINUS_Y_ONE_AND_HALF_DIAMETER_M
     foot4[2] -= FOOT_TIP_Z_DOWN_M
 
     # 关节限位（从URDF提取）

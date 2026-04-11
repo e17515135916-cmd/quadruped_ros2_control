@@ -1016,3 +1016,56 @@ ros2 run dog2_motion_control obstacle_analysis \
 - **建议下一步**
   1. 保留当前语义改动，先完成 RViz/Gazebo 运行时拖动验证（四腿 rail +q 行为一致性）。
   2. 单独修复 `test_joint_controller.py` 的导入问题后，再跑 `dog2_motion_control` 全量测试以完成回归闭环。
+
+---
+
+## 2026-04-11 16:31 Cursor 对话归档：足端闭环、原语碰撞、MPC 接触桥接、控制接口（本对话）
+
+- **足端 `foot_fixed` / `foot_tip` 与 Python 对齐**
+  - `*_foot_fixed` 原点在父系 **`tibia_link`** 下表达；调试足端为 `foot_link` 绿色小球，`foot_sphere_radius = 0.012 m`（直径 `d = 2r`）。
+  - 文中「+Y / −Y」均指 **`tibia_link` 的 Y 轴方向**（与 `base_link` 侧向在任意姿态下未必恒同向）。
+
+- **已尝试后撤销的改动（按用户要求回退，当前代码中不存在）**
+  - 沿 **`base_link` −Z** 平移 **一球半径**：已在 xacro / `leg_parameters` 中撤销。
+  - 沿 **`tibia_link` +X** 平移 **一球直径**（`+0.024 m`）：已撤销，足端 X 恢复为仅 `±foot_tip_lateral_inboard_m`（`±0.024`）。
+
+- **当前保留的足端 Y 向调整（相对历史基准 −0.269179 / −0.269202）**
+  1. 先沿 **`tibia_link` +Y** 平移 **半直径**（`d/2 = r = 0.012 m`）。
+  2. 再沿 **`tibia_link` −Y** 平移 **一个半直径**（`1.5d = 3r = 0.036 m`）。
+  - **净效果**：Y 方向相对原始 CAD 基准再偏移 **`+r − 3r = −2r`**（即 **`−0.024 m`**），数值上腿 1–3 的 Y 约为 **−0.293179**，腿 4 约为 **−0.293202**。
+
+- **涉及文件**
+  - `src/dog2_description/urdf/dog2.urdf.xacro`
+    - `foot_sphere_radius`、`foot_tip_plus_y_half_diameter_m`（`= r`）、`foot_tip_minus_y_one_and_half_diameter_m`（`= 3r`）。
+    - `leg12` / `leg3` / `leg4` 的 `foot_tip_xyz` 中 Y 分量：`plus − minus − 0.269179`（腿 4 用 `0.269202`）；足端球 `radius` 使用 `${foot_sphere_radius}`。
+  - `src/dog2_motion_control/dog2_motion_control/leg_parameters.py`
+    - `FOOT_TIP_PLUS_Y_HALF_DIAMETER_M`、`FOOT_TIP_MINUS_Y_ONE_AND_HALF_DIAMETER_M` 与 xacro 对齐；`foot_tip_offset_tibia[1]` 使用 `+= PLUS − MINUS`；`FOOT_TIP_Z_DOWN_M` 仍用 `FOOT_SPHERE_RADIUS_M` 展开，与 URDF `foot_tip_z_down_m` 一致。
+
+- **备注**
+  - 若后续「向下 / 侧向」需严格按 **`base_link`** 轴定义，需在具体站姿下做轴变换或改为运行时补偿，不宜仅改标量 `foot_tip_xyz`。
+
+- **`*_foot_link` 物理与 Gazebo 主触地（球心 = frame 原点）**
+  - `collision` 与 `visual` 同为球体 `radius=0.012`；`mass=0.05 kg`，实心球惯量 `I=(2/5)mr^2` 对角 `2.88e-06`。
+  - Gazebo 摩擦/接触刚度（`mu1/mu2/kp/kd/minDepth/maxVel`）挂在 **`foot_link`**，已从 `tibia_link` 迁走；胫骨另设低摩擦/低刚度以防蹭地抢接触。
+  - 各腿 `foot_link` Gazebo 内增加 **`contact` sensor**（`<contact/>` 监测该 link 全部碰撞），供仿真触地反馈。
+
+- **原语碰撞（数值稳定性）**
+  - `base_link`：`mesh` 碰撞改为与 base STL **AABB 对齐** 的 `box`。
+  - `tibia_link`：胫骨碰撞 STL 改为 **AABB 对齐** 的 `box`，左右腿 `tibia_col_xyz` 分 L/R 常量传入宏。
+
+- **左右镜像 xacro 正规化（减轻单腿 rpy 硬编码）**
+  - 抽出 `leg_rail_rpy_L/R`、`leg_hip_rpy_R`、`leg_knee_xyz_R`、`leg_thigh_mesh_flip_rpy` 等属性；四腿实例引用常量，右前大腿 mesh 仍保留必要的 `thigh_rpy` 翻转。
+
+- **ros2_control：向 effort / hybrid 铺路**
+  - 各驱动关节在保留 **`position`** 命令接口的同时增加 **`effort`**；`ros2_controllers.yaml` 顶部注明 JTC 仅用 position、力矩模式见 `effort_controllers.yaml`。
+
+- **MPC + Gazebo 足端接触（可选）**
+  - `mpc_robot_controller`：`use_gz_foot_contact` 与四条 `gz_contact_topic_*`；订阅 `ros_gz_interfaces/Contacts`，用 **实测** 刷新当前步 `contact_now`（摆腿/混合）；**MPC 视界 `contact_pred` 仍跟步态**。
+  - `spider_gazebo_mpc.launch.py`：`gz_world_name`、`bridge_foot_contact`；`parameter_bridge` 映到 `/dog2/foot_contact/{lf,lh,rh,rf}`；`_estimate_min_collision_z` 支持 **mesh/box/sphere** 以配合 spawn 高度估计。
+  - `dog2_motion_control/package.xml`：依赖 **`ros_gz_interfaces`**。
+
+- **测试**
+  - `test_spherical_foot_geometry_property.py` 更新为 `lf/lh/rh/rf_foot_link`、半径 `0.012`、调试绿色材质。
+
+- **Git 存档（同次提交）**
+  - 标签建议：`archive/2026-04-11-1631`；可选 `git archive` 生成 `carbot_ws-archive-20260411-1631.tar.gz` 供离线快照。

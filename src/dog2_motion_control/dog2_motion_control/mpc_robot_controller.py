@@ -22,6 +22,7 @@ from rclpy.time import Time
 
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from ros_gz_interfaces.msg import Contacts
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 from ament_index_python.packages import get_package_share_directory
@@ -488,6 +489,11 @@ class MPCRobotController(Node):
         self.declare_parameter("idle_hold_femur_kd", 14.0)
         self.declare_parameter("idle_hold_tibia_kp", 70.0)
         self.declare_parameter("idle_hold_tibia_kd", 14.0)
+        self.declare_parameter("use_gz_foot_contact", False)
+        self.declare_parameter("gz_contact_topic_lf", "/dog2/foot_contact/lf")
+        self.declare_parameter("gz_contact_topic_lh", "/dog2/foot_contact/lh")
+        self.declare_parameter("gz_contact_topic_rh", "/dog2/foot_contact/rh")
+        self.declare_parameter("gz_contact_topic_rf", "/dog2/foot_contact/rf")
 
         self._config_file: str = str(self.get_parameter("config_file").value)
         self._control_period_sec: float = float(self.get_parameter("control_period_sec").value)
@@ -530,6 +536,8 @@ class MPCRobotController(Node):
         self._idle_hold_femur_kd: float = float(self.get_parameter("idle_hold_femur_kd").value)
         self._idle_hold_tibia_kp: float = float(self.get_parameter("idle_hold_tibia_kp").value)
         self._idle_hold_tibia_kd: float = float(self.get_parameter("idle_hold_tibia_kd").value)
+        self._use_gz_foot_contact: bool = bool(self.get_parameter("use_gz_foot_contact").value)
+        self._gz_foot_in_contact = np.ones(4, dtype=int)
         self._startup_time = self.get_clock().now()
         self._standup_complete = False
 
@@ -554,6 +562,24 @@ class MPCRobotController(Node):
         self.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 10)
         self.create_subscription(JointState, "/joint_states", self._on_joint_state, 10)
         self.create_subscription(Odometry, self._odom_topic, self._on_odom, 10)
+
+        if self._use_gz_foot_contact:
+            gz_topics = (
+                str(self.get_parameter("gz_contact_topic_lf").value),
+                str(self.get_parameter("gz_contact_topic_lh").value),
+                str(self.get_parameter("gz_contact_topic_rh").value),
+                str(self.get_parameter("gz_contact_topic_rf").value),
+            )
+            for leg_idx, topic in enumerate(gz_topics):
+                self.create_subscription(
+                    Contacts,
+                    topic,
+                    self._make_gz_foot_contact_cb(leg_idx),
+                    10,
+                )
+            self.get_logger().info(
+                "Gazebo foot contact fusion enabled (topics lf,lh,rh,rf order matches MPC leg order)."
+            )
 
         # Output for forward_command_controller (effort commands).
         self._effort_pub = self.create_publisher(Float64MultiArray, self._effort_controller_topic, 10)
@@ -806,6 +832,12 @@ class MPCRobotController(Node):
         # Track whether we were in mpc_gait in the previous timer tick.
         # When switching into mpc_gait, we reset the gait phase counters.
         self._was_in_mpc_gait = False
+
+    def _make_gz_foot_contact_cb(self, leg_idx: int):
+        def _cb(msg: Contacts) -> None:
+            self._gz_foot_in_contact[leg_idx] = 1 if len(msg.contacts) > 0 else 0
+
+        return _cb
 
     def _on_cmd_vel(self, msg: Twist) -> None:
         self._target_twist = (float(msg.linear.x), float(msg.linear.y), float(msg.angular.z))
@@ -1260,6 +1292,9 @@ class MPCRobotController(Node):
                     contact_pred[k, leg_idx] = 1 if phase_k_leg >= swing_phase_frac else 0
 
         contact_now = contact_pred[0, :].astype(int)
+        # 实测触地：刷新当前步的 contact_now（摆腿/混合仍用）；MPC 视界 contact_pred 仍跟步态生成。
+        if self._use_gz_foot_contact:
+            contact_now = self._gz_foot_in_contact.astype(int)
         self._update_contact_blend(contact_now)
 
         # Update swing targets on lift-off (stance -> swing)

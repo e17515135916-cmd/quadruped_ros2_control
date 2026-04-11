@@ -1,3 +1,5 @@
+# Hybrid 说明：URDF ros2_control 同时为每关节声明 position + effort 接口。
+# 本文件仅激活 JTC（position）；力矩模式见 dog2_motion_control/config/effort_controllers.yaml。
 # ⚠️ 必须加在这个最顶端！解决 Gazebo 命名硬编码导致的“假死”问题
 dog2_controller_manager:
   ros__parameters:

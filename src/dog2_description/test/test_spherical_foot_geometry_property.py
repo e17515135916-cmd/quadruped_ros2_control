@@ -5,9 +5,8 @@ Property-Based Test: Spherical Foot Geometry Integrity
 Feature: dog2-spherical-foot, Property 1: 球形足端几何体完整性
 Validates: Requirements 1.1, 1.2, 1.3
 
-This test verifies that for any leg instantiation (leg_num 1-4), 
-the foot link uses spherical geometry with radius 0.02m in both
-visual and collision tags, and that the geometry is consistent.
+This test verifies that for each leg prefix (lf,lh,rh,rf), the
+``*_foot_link`` uses matching spherical visual/collision (r=0.012 m).
 """
 
 import subprocess
@@ -67,31 +66,18 @@ def parse_urdf(urdf_content):
     return ET.fromstring(urdf_content)
 
 
+_EXPECTED_FOOT_RADIUS = 0.012
+_EXPECTED_FOOT_RGBA = [0.2, 0.85, 0.35, 1.0]
+
+
 @settings(max_examples=100)
-@given(leg_num=st.integers(min_value=1, max_value=4))
-def test_spherical_foot_geometry_property(leg_num):
-    """
-    Property Test: Spherical Foot Geometry Integrity
-    
-    For any leg instantiation (leg_num 1-4), the foot link should use
-    spherical geometry with radius 0.02m in both visual and collision tags,
-    and the geometry should be consistent between them.
-    
-    This property validates that:
-    1. The foot link exists
-    2. Visual geometry is a sphere with radius 0.02m
-    3. Collision geometry is a sphere with radius 0.02m
-    4. Visual and collision geometries are consistent
-    5. Visual material color is grey (0.5, 0.5, 0.5, 1)
-    """
-    # Generate URDF from xacro
+@given(leg_prefix=st.sampled_from(["lf", "lh", "rh", "rf"]))
+def test_spherical_foot_geometry_property(leg_prefix):
+    """Each ``{prefix}_foot_link`` uses a matching 0.012 m sphere in visual and collision."""
     urdf_content = generate_urdf_from_xacro()
     root = parse_urdf(urdf_content)
-    
-    # Find the foot link
-    # Naming pattern: l{leg_num}1111 generates:
-    # Leg 1: l11111, Leg 2: l21111, Leg 3: l31111, Leg 4: l41111
-    foot_link_name = f"l{leg_num}1111"
+
+    foot_link_name = f"{leg_prefix}_foot_link"
     
     foot_link = root.find(f".//link[@name='{foot_link_name}']")
     
@@ -117,9 +103,9 @@ def test_spherical_foot_geometry_property(leg_num):
     )
     
     visual_radius = float(visual_sphere.get("radius"))
-    assert abs(visual_radius - 0.02) < 1e-6, (
+    assert abs(visual_radius - _EXPECTED_FOOT_RADIUS) < 1e-6, (
         f"Foot link '{foot_link_name}' visual sphere radius is {visual_radius}, "
-        f"expected 0.02"
+        f"expected {_EXPECTED_FOOT_RADIUS}"
     )
     
     # Check collision geometry
@@ -140,9 +126,9 @@ def test_spherical_foot_geometry_property(leg_num):
     )
     
     collision_radius = float(collision_sphere.get("radius"))
-    assert abs(collision_radius - 0.02) < 1e-6, (
+    assert abs(collision_radius - _EXPECTED_FOOT_RADIUS) < 1e-6, (
         f"Foot link '{foot_link_name}' collision sphere radius is {collision_radius}, "
-        f"expected 0.02"
+        f"expected {_EXPECTED_FOOT_RADIUS}"
     )
     
     # Verify visual and collision radii are consistent
@@ -151,7 +137,7 @@ def test_spherical_foot_geometry_property(leg_num):
         f"visual={visual_radius}, collision={collision_radius}"
     )
     
-    # Check visual material color (grey: 0.5, 0.5, 0.5, 1)
+    # Debug foot color (mat_foot_debug in xacro)
     material = visual.find("material")
     assert material is not None, (
         f"Foot link '{foot_link_name}' visual has no material element"
@@ -168,7 +154,7 @@ def test_spherical_foot_geometry_property(leg_num):
     )
     
     rgba = [float(x) for x in rgba_str.split()]
-    expected_rgba = [0.5, 0.5, 0.5, 1.0]
+    expected_rgba = _EXPECTED_FOOT_RGBA
     
     for i, (actual, expected) in enumerate(zip(rgba, expected_rgba)):
         assert abs(actual - expected) < 1e-6, (
@@ -185,9 +171,8 @@ if __name__ == "__main__":
     try:
         test_spherical_foot_geometry_property()
         print("\n✓ Property test PASSED: All foot links have spherical geometry")
-        print("  Verified: Each foot link (1-4) uses sphere with radius 0.02m")
+        print(f"  Verified: lf/lh/rh/rf foot_link sphere r={_EXPECTED_FOOT_RADIUS} m")
         print("  Verified: Visual and collision geometries are consistent")
-        print("  Verified: Visual material is grey (0.5, 0.5, 0.5, 1)")
     except AssertionError as e:
         print(f"\n✗ Property test FAILED: {e}")
         exit(1)
