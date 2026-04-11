@@ -37,11 +37,13 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}/
 )
 
-# Install world files
-install(DIRECTORY
-  worlds
-  DESTINATION share/${PROJECT_NAME}/
-)
+# Install world files (optional; some branches do not ship worlds/).
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/worlds")
+  install(DIRECTORY
+    worlds
+    DESTINATION share/${PROJECT_NAME}/
+  )
+endif()
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

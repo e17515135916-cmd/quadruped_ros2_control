@@ -8,7 +8,7 @@ spider_robot_controller:
       stride_height: 0.03
       cycle_time: 1.2
       duty_factor: 0.75
-      body_height: 0.24
+      body_height: 0.18
       gait_type: "crawl"
       leg_sequence: ["leg1", "leg2", "leg3", "leg4"]
       phase_offsets:
@@ -26,23 +26,23 @@ spider_robot_controller:
       lf:
         rail_m: 0.0
         hip_roll_rad: 0.0
-        hip_pitch_rad: 0.3
-        knee_pitch_rad: -0.5
+        hip_pitch_rad: -0.3
+        knee_pitch_rad: 0.6
       lh:
         rail_m: 0.0
         hip_roll_rad: 0.0
-        hip_pitch_rad: 0.3
-        knee_pitch_rad: -0.5
+        hip_pitch_rad: -0.3
+        knee_pitch_rad: 0.6
       rh:
         rail_m: 0.0
         hip_roll_rad: 0.0
-        hip_pitch_rad: 0.3
-        knee_pitch_rad: -0.5
+        hip_pitch_rad: -0.3
+        knee_pitch_rad: 0.6
       rf:
         rail_m: 0.0
         hip_roll_rad: 0.0
-        hip_pitch_rad: 0.3
-        knee_pitch_rad: -0.5
+        hip_pitch_rad: -0.3
+        knee_pitch_rad: 0.6
     
     joint_limits:
       rail:

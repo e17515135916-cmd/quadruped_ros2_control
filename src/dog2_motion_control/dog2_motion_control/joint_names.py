@@ -23,6 +23,7 @@ JOINT_ROLES: List[JointRole] = ["rail", "hip_roll", "hip_pitch", "knee_pitch"]
 # URDF 实际使用的旋转关节类型（历史命名：coxa/femur/tibia）
 UrdfRevoluteJointType = Literal["coxa", "femur", "tibia"]
 REVOLUTE_JOINT_TYPES: List[UrdfRevoluteJointType] = ["coxa", "femur", "tibia"]
+LegacyRevoluteJointType = Literal["haa", "hfe", "kfe"]
 
 # 拓扑语义 -> URDF 关节类型映射（保持 URDF 字符串不变）
 ROLE_TO_URDF_REVOLUTE: Dict[JointRole, UrdfRevoluteJointType] = {
@@ -30,6 +31,12 @@ ROLE_TO_URDF_REVOLUTE: Dict[JointRole, UrdfRevoluteJointType] = {
     "hip_pitch": "femur",
     "knee_pitch": "tibia",
     # "rail" 为 prismatic，不走该表
+}
+
+LEGACY_TO_URDF_REVOLUTE: Dict[LegacyRevoluteJointType, UrdfRevoluteJointType] = {
+    "haa": "coxa",
+    "hfe": "femur",
+    "kfe": "tibia",
 }
 
 
@@ -49,6 +56,16 @@ def get_urdf_revolute_joint_name(leg_num: int, joint_type: UrdfRevoluteJointType
     return f"{leg_prefix(leg_num)}_{joint_type}_joint"
 
 
+def get_revolute_joint_name(leg_num: int, joint_type: str) -> str:
+    """兼容历史接口。
+
+    允许旧命名（haa/hfe/kfe）与当前 URDF 命名（coxa/femur/tibia）共存，
+    以避免历史测试和工具脚本在重构阶段被导入错误阻塞。
+    """
+    resolved_type = LEGACY_TO_URDF_REVOLUTE.get(joint_type, joint_type)
+    return get_urdf_revolute_joint_name(leg_num, resolved_type)  # type: ignore[arg-type]
+
+
 def get_joint_name(leg_num: int, role: JointRole) -> str:
     """按拓扑语义获取 URDF 关节字符串。"""
     if role == "rail":
@@ -65,9 +82,20 @@ def get_all_joint_names() -> List[str]:
     return names
 
 
-def get_leg_joint_names(leg_num: int) -> Dict[JointRole, str]:
-    """获取单腿 4 个关节的 URDF 名称（以拓扑语义为键）。"""
-    return {role: get_joint_name(leg_num, role) for role in JOINT_ROLES}
+def get_leg_joint_names(leg_num: int) -> Dict[str, str]:
+    """获取单腿关节名称（同时兼容新旧键）。"""
+    names = {
+        "rail": get_rail_joint_name(leg_num),
+        "coxa": get_urdf_revolute_joint_name(leg_num, "coxa"),
+        "femur": get_urdf_revolute_joint_name(leg_num, "femur"),
+        "tibia": get_urdf_revolute_joint_name(leg_num, "tibia"),
+    }
+    # 新拓扑语义键：与旧键指向同一 URDF 关节
+    names["hip_roll"] = names["coxa"]
+    names["hip_pitch"] = names["femur"]
+    names["knee_pitch"] = names["tibia"]
+    return names
 
 
+RAIL_JOINTS: List[str] = [get_rail_joint_name(leg_num) for leg_num in (1, 2, 3, 4)]
 ALL_JOINT_NAMES: List[str] = get_all_joint_names()

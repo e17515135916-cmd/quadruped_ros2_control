@@ -48,7 +48,8 @@ def test_joint_controller_initialization(test_node):
     controller = JointController(test_node)
     
     # 验证发布器和订阅器已创建
-    assert controller.trajectory_pub is not None
+    assert controller.revolute_trajectory_pub is not None
+    assert controller.rail_trajectory_pub is not None
     assert controller.joint_state_sub is not None
     
     # 验证关节限位已加载（16个关节：4个导轨 + 12个旋转）
@@ -64,7 +65,7 @@ def test_joint_controller_initialization(test_node):
     
     # 验证旋转关节限位
     for leg_num in [1, 2, 3, 4]:
-        for joint_type in ['haa', 'hfe', 'kfe']:
+        for joint_type in ['coxa', 'femur', 'tibia']:
             joint_name = get_revolute_joint_name(leg_num, joint_type)
             assert joint_name in controller.joint_limits
             lower, upper = controller.joint_limits[joint_name]
@@ -85,7 +86,7 @@ def test_joint_state_callback(test_node):
     
     # 创建模拟的JointState消息
     msg = JointState()
-    msg.name = ['j1', 'lf_haa_joint', 'lf_hfe_joint']
+    msg.name = ['lf_rail_joint', 'lf_coxa_joint', 'lf_femur_joint']
     msg.position = [0.0, 0.5, -0.3]
     msg.velocity = [0.0, 0.1, -0.05]
     
@@ -93,13 +94,13 @@ def test_joint_state_callback(test_node):
     controller._joint_state_callback(msg)
     
     # 验证状态已正确存储
-    assert 'j1' in controller.current_joint_states
-    assert controller.current_joint_states['j1']['position'] == 0.0
-    assert controller.current_joint_states['j1']['velocity'] == 0.0
+    assert 'lf_rail_joint' in controller.current_joint_states
+    assert controller.current_joint_states['lf_rail_joint']['position'] == 0.0
+    assert controller.current_joint_states['lf_rail_joint']['velocity'] == 0.0
     
-    assert 'lf_haa_joint' in controller.current_joint_states
-    assert controller.current_joint_states['lf_haa_joint']['position'] == 0.5
-    assert controller.current_joint_states['lf_haa_joint']['velocity'] == 0.1
+    assert 'lf_coxa_joint' in controller.current_joint_states
+    assert controller.current_joint_states['lf_coxa_joint']['position'] == 0.5
+    assert controller.current_joint_states['lf_coxa_joint']['velocity'] == 0.1
 
 
 def test_check_joint_limits_within_range(test_node):
@@ -113,7 +114,7 @@ def test_check_joint_limits_within_range(test_node):
     controller = JointController(test_node)
     
     # 测试旋转关节（弧度）
-    joint_name = 'lf_haa_joint'
+    joint_name = 'lf_coxa_joint'
     position = 1.0  # 在限位范围内
     result = controller.check_joint_limits(joint_name, position)
     assert result == position
@@ -131,7 +132,7 @@ def test_check_joint_limits_below_lower(test_node):
     controller = JointController(test_node)
     
     # 测试旋转关节（弧度）
-    joint_name = 'lf_haa_joint'
+    joint_name = 'lf_coxa_joint'
     position = -5.0  # 低于下限
     result = controller.check_joint_limits(joint_name, position)
     
@@ -151,7 +152,7 @@ def test_check_joint_limits_above_upper(test_node):
     controller = JointController(test_node)
     
     # 测试旋转关节（弧度）
-    joint_name = 'lf_hfe_joint'
+    joint_name = 'lf_femur_joint'
     position = 5.0  # 高于上限
     result = controller.check_joint_limits(joint_name, position)
     
@@ -193,8 +194,9 @@ def test_monitor_rail_positions_slip_detected(test_node):
     controller = JointController(test_node)
     
     # 模拟导轨滑动（j1超出阈值）
-    controller.current_joint_states['j1'] = {
-        'position': 0.001,  # 1.0mm，超出阈值
+    controller.last_rail_targets['lf_rail_joint'] = 0.0
+    controller.current_joint_states['lf_rail_joint'] = {
+        'position': 0.01,  # 10.0mm，超出默认5mm阈值
         'velocity': 0.0
     }
     
@@ -206,6 +208,7 @@ def test_monitor_rail_positions_slip_detected(test_node):
             'velocity': 0.0
         }
     
+    controller._rail_slip_patience = 1
     result = controller.monitor_rail_positions()
     assert result is False
 
@@ -220,13 +223,13 @@ def test_get_joint_position(test_node):
     controller = JointController(test_node)
     
     # 设置一些关节状态
-    controller.current_joint_states['j1'] = {
+    controller.current_joint_states['lf_rail_joint'] = {
         'position': 0.0,
         'velocity': 0.0
     }
     
     # 测试已知关节
-    position = controller.get_joint_position('j1')
+    position = controller.get_joint_position('lf_rail_joint')
     assert position == 0.0
     
     # 测试未知关节
@@ -249,7 +252,7 @@ def test_send_joint_commands_structure(test_node):
     # 准备关节位置命令
     joint_positions = {}
     for leg_num in [1, 2, 3, 4]:
-        for joint_type in ['haa', 'hfe', 'kfe']:
+        for joint_type in ['coxa', 'femur', 'tibia']:
             joint_name = get_revolute_joint_name(leg_num, joint_type)
             joint_positions[joint_name] = 0.5  # 示例角度
     

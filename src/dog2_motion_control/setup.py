@@ -24,6 +24,8 @@ PACKAGE_CONFIG_SHARE_PATH = str(Path("share") / PACKAGE_NAME / "config")
 
 CONSOLE_SCRIPTS = [
     "spider_controller = dog2_motion_control.spider_robot_controller:main",
+    "mpc_controller = dog2_motion_control.mpc_robot_controller:main",
+    "gz_pose_to_odom = dog2_motion_control.gz_pose_to_odom:main",
     "obstacle_analysis = dog2_motion_control.obstacle_analysis:main",
     "gz_gain_setter = dog2_motion_control.gz_gain_setter:main",
 ]

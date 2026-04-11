@@ -8,6 +8,7 @@ from typing import Optional, Tuple, Dict, Any
 import logging
 import numpy as np
 from .leg_parameters import LegParameters
+from .joint_semantics import JOINT_AXIS_LOCAL
 
 
 class KinematicsSolver:
@@ -117,28 +118,33 @@ class KinematicsSolver:
         ])
 
     def _forward_local(self, params: LegParameters, s_m: float, q: np.ndarray) -> np.ndarray:
-        """在腿局部坐标系中计算脚点位置。"""
+        """在腿局部坐标系中计算脚点位置。
+
+        末端点定义为 URDF 中 foot_link 坐标系原点（tibia_link 经固定关节 foot_tip 偏移）：
+        - 与 dog2.urdf.xacro 中 *_foot_fixed / *_foot_link 及 Pinocchio/MPC 足端帧一致
+        """
         hip_roll_rad, hip_pitch_rad, knee_pitch_rad = q
 
-        rail_translation_axis = np.array([1.0, 0.0, 0.0])
+        # rail semantic contract: +q translates along base_link-local +X.
+        rail_translation_axis = JOINT_AXIS_LOCAL["rail"]
         T = self._homogeneous(np.eye(3), rail_translation_axis * float(s_m))
 
-        # coxa_joint origin and rotation（完全由参数提供，不做腿别硬编码）
-        joint_axis = np.array([-1.0, 0.0, 0.0])
+        # Revolute joint local axes stay shared across all four legs; only the
+        # fixed origin transforms differ where mirror compensation is required.
+        joint_axis = JOINT_AXIS_LOCAL["coxa"]
         T = T @ self._homogeneous(self._rotation_matrix_from_rpy(*params.hip_rpy), params.hip_offset)
         T = T @ self._homogeneous(self._rot_axis_angle(joint_axis, hip_roll_rad), np.zeros(3))
 
         # femur_joint origin and rotation
         T = T @ self._homogeneous(self._rotation_matrix_from_rpy(*params.knee_rpy), params.knee_offset)
-        T = T @ self._homogeneous(self._rot_axis_angle(joint_axis, hip_pitch_rad), np.zeros(3))
+        T = T @ self._homogeneous(self._rot_axis_angle(JOINT_AXIS_LOCAL["femur"], hip_pitch_rad), np.zeros(3))
 
         # tibia_joint origin and rotation
         T = T @ self._homogeneous(self._rotation_matrix_from_rpy(*params.tibia_rpy), params.tibia_offset)
-        T = T @ self._homogeneous(self._rot_axis_angle(joint_axis, knee_pitch_rad), np.zeros(3))
+        T = T @ self._homogeneous(self._rot_axis_angle(JOINT_AXIS_LOCAL["tibia"], knee_pitch_rad), np.zeros(3))
+        T = T @ self._homogeneous(np.eye(3), params.foot_tip_offset_tibia)
 
-        # 脚端 = tibia_joint 坐标系中的 shin_xyz 偏移（tibia_link 接触代理位置）
-        shin = np.asarray(params.shin_xyz)
-        p = T @ np.array([shin[0], shin[1], shin[2], 1.0])
+        p = T @ np.array([0.0, 0.0, 0.0, 1.0])
         return p[:3]
 
     def _check_joint_limits(self, leg_id: str, hip_roll_rad: float, hip_pitch_rad: float, knee_pitch_rad: float) -> bool:

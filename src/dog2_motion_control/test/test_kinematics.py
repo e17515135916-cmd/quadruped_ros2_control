@@ -236,46 +236,20 @@ class TestCoordinateTransforms:
             error = np.linalg.norm(pos_back - test_position)
             assert error < 1e-10, f"{leg_id}: 坐标系转换round-trip误差应该接近0，实际: {error}"
     
-    def test_front_legs_rotation(self, solver):
-        """测试前腿的坐标系旋转（90度绕X轴）"""
-        # lf: rpy = (1.5708, 0, 0)
-        # rf: rpy = (1.5708, 0, -pi)
-        for leg_id in ['lf', 'rf']:
+    def test_all_legs_use_normalized_base_rotation(self, solver):
+        """测试四条腿都使用统一的 rail 根坐标系旋转。"""
+        for leg_id in ['lf', 'rf', 'lh', 'rh']:
             params = LEG_PARAMETERS[leg_id]
             roll, pitch, yaw = params.base_rotation
-            
-            # 验证旋转角度
+
             assert np.isclose(roll, np.pi/2, atol=0.01), f"{leg_id}: roll应该约为90度"
             assert np.isclose(pitch, 0.0, atol=0.01), f"{leg_id}: pitch应该为0"
-            if leg_id == 'lf':
-                assert np.isclose(yaw, 0.0, atol=0.01), f"{leg_id}: yaw应该为0"
-            else:
-                assert np.isclose(np.abs(yaw), np.pi, atol=0.01), f"{leg_id}: yaw应该约为±pi"
-            
-            # 测试旋转效果：base_link的Z轴应该映射到腿部局部的Y轴
-            # 在base_link中沿Z轴的向量
+            assert np.isclose(yaw, 0.0, atol=0.01), f"{leg_id}: yaw应该已统一为0"
+
             vec_base = np.array([0.0, 0.0, 1.0])
             R = solver._rotation_matrix_from_rpy(roll, pitch, yaw)
             vec_local = R.T @ vec_base
-            
-            # 应该主要沿着局部Y轴
             assert np.abs(vec_local[1]) > 0.9, f"{leg_id}: Z轴应该映射到局部Y轴"
-    
-    def test_rear_legs_rotation(self, solver):
-        """测试后腿的坐标系旋转（90度绕X轴 + 180度绕Z轴）"""
-        # lh: rpy = (1.5708, 0, 0)
-        # rh: rpy = (1.5708, 0, -pi)
-        for leg_id in ['lh', 'rh']:
-            params = LEG_PARAMETERS[leg_id]
-            roll, pitch, yaw = params.base_rotation
-            
-            # 验证旋转角度
-            assert np.isclose(roll, np.pi/2, atol=0.01), f"{leg_id}: roll应该约为90度"
-            assert np.isclose(pitch, 0.0, atol=0.01), f"{leg_id}: pitch应该为0"
-            if leg_id == 'rh':
-                assert np.isclose(np.abs(yaw), np.pi, atol=0.01), f"{leg_id}: yaw应该约为±pi"
-            else:
-                assert np.isclose(yaw, 0.0, atol=0.01), f"{leg_id}: yaw应该为0"
     
     def test_leg_base_positions(self, solver):
         """测试腿部基座位置的正确性"""

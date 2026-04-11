@@ -19,23 +19,6 @@ controller_manager:
     rail_position_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
-# gz_ros2_control plugin parameters (applied by GazeboSimROS2ControlPlugin).
-# This overrides the very soft default gain (0.1) for position command interface.
-# See docs: https://control.ros.org/master/doc/gz_ros2_control/doc/index.html
-gz_ros_control:
-  ros__parameters:
-    # Hold unclaimed joints at their current position (default: true).
-    hold_joints: true
-    # Proportional gain used by the GazeboSimSystem position interface.
-    # Stability guideline: p <= 2.0 (response also scales with controller_manager.update_rate).
-    position_proportional_gain: 1.0
-
-# Some installations expose the plugin node as /gz_ros2_control instead of /gz_ros_control.
-gz_ros2_control:
-  ros__parameters:
-    hold_joints: true
-    position_proportional_gain: 1.0
-
 joint_state_broadcaster:
   ros__parameters:
     publish_rate: 100.0

@@ -1,5 +1,37 @@
 # DEVELOPMENT_LOG
 
+## 2026-04-07 21:52 rail 符号/足端帧/限位语义统一 + 回归测试闭环（Position ↔ IK ↔ MPC/WBC）
+
+- **结论（最重要）**
+  - 修复了 `KinematicsSolver` 与 URDF 在 `rail_joint` 方向定义上的**符号冲突**：URDF `axis="-1 0 0"`，求解器侧 FK/IK 统一改为沿 **-X** 平移，消除“同一个 `rail_m` 语义相反”的高危假象源。
+  - 将 `KinematicsSolver` 的末端点定义统一为 **`tibia_link` frame 原点**，不再使用 `shin_xyz` 作为足端/接触代理偏移点，和 `MPCRobotController` 侧的接触代理帧定义对齐，避免“控制点/优化点不是同一点”的隐性分叉。
+  - 停止用 YAML 的统一 `rail.min/max` 覆盖 per-leg rail 方向语义：IK 的 rail 限位保持由 `leg_parameters.py` 的每腿限位（正/负向）决定，避免配置把物理语义冲掉。
+  - 补齐了**可证伪**的几何回归验证脚本：`solve_fk()` 与 Pinocchio 的 `*_tibia_link` 在 `base_link` 坐标系下对齐误差达到 `1e-13 m` 量级（数值噪声级），证明“改 IK 不改 MPC”路线在几何层面闭环成立。
+
+- **工程改动：rail 方向符号 + 足端定义统一（IK/FK）**
+  - 文件：`src/dog2_motion_control/dog2_motion_control/kinematics_solver.py`
+    - `rail_translation_axis` 从 `+X` 改为 `-X`，匹配 URDF `axis="-1 0 0"`。
+    - FK/IK 末端点从 `T @ shin_xyz` 改为 `tibia_link` 原点（不再对 `shin_xyz` 施加末端偏移）。
+
+- **工程改动：per-leg rail 限位语义保护（不被 YAML 覆盖）**
+  - 文件：`src/dog2_motion_control/dog2_motion_control/spider_robot_controller.py`
+    - `_apply_config_joint_limits_to_ik()`：仅同步 `coxa/femur/tibia`（haa/hfe/kfe）旋转关节限位；不再统一覆盖 `rail` 限位，rail 仍来自 `leg_parameters.py` 的每腿定义。
+
+- **工程改动：执行层 clamp 与 IK 同步刷新入口**
+  - 文件：`src/dog2_motion_control/dog2_motion_control/joint_controller.py`
+    - 新增 `reload_joint_limits()`：从 `LEG_PARAMETERS` 重新加载 `self.joint_limits`。
+  - 文件：`src/dog2_motion_control/dog2_motion_control/spider_robot_controller.py`
+    - `reload_config_from_file()`：在重载配置后尝试调用 `joint_controller.reload_joint_limits()`，避免“IK 改了，执行层 clamp 还是旧表”的半 reload 假象。
+
+- **工程改动：最小几何回归测试（FK/IK 自洽 + FK vs Pinocchio 对齐）**
+  - 文件：`src/dog2_motion_control/scripts/test_kinematics_consistency.py`（新增）
+    - FK/IK 自洽（确定性）：比较 `FK(global)->to_leg_frame` 与 `_forward_local(local)`，`geom_local_max ~ 1e-17 m`（PASS）。
+    - FK vs Pinocchio 对齐：将 Pinocchio 的 `*_tibia_link` 世界坐标通过 `base_link` frame 逆变换映射到 `base_link` 坐标系后与 `solve_fk()` 对比，最大误差 `~2e-13 m`（PASS）。
+    - 增加按腿统计、worst-case 样本输出、PASS/WARN/FAIL 阈值；并在未 source 工作区时自动补齐 `sys.path` 以便直接运行脚本。
+
+- **已知风险（未在本轮强行修复，避免引入新假象）**
+  - `solve_ik()` 的数值收敛性在“近站立扰动采样”下仍存在较高失败率：这反映的是当前 DLS+seeds 的收敛域/初值策略问题，而非几何链路不一致。建议作为“阶段 2.5：IK 收敛性整治”单独推进，再进入阶段 3（在线 rail 冗余闭环放开与 effort rail lock 模式化）。
+
 ## 2026-03-31 11:14 Gazebo 质量缩放 A/B 试验基建 + 导轨跟踪瓶颈定位
 - **结论（最重要）**
   - `gz_ros2_control` 的 `position_proportional_gain` 是“位置误差→期望速度”的系数（而非力矩 PID 的 P），工程上不应暴力拉高到几十；在本环境中该参数也不会从 controllers YAML/URDF 自动注入，必须运行时 set。
@@ -676,3 +708,311 @@ ros2 run dog2_motion_control obstacle_analysis \
 
 - **结果**
   - 全仓 `package.xml` 中 `todo.todo`、`TODO license/description`、`Your Name/your@email.com` 已清零。
+
+---
+
+## 2026-04-02 17:05 构建环境异常定位（colcon setup 链路）
+
+- **现象**
+  - `colcon build --packages-select dog2_motion_control` 显示构建成功，但后续 `source install/setup.bash` 报错：
+    - `not found: "/home/dell/aperfect/carbot_ws/local_setup.bash"`
+  - `ros2 launch dog2_motion_control ...` 提示包未找到，仅搜索到 `/opt/ros/humble`。
+
+- **根因判断（高置信）**
+  - 当前 shell 环境中残留了 `COLCON_CURRENT_PREFIX=/home/dell/aperfect/carbot_ws`（工作区根目录），导致 `/opt/ros/humble/setup.bash` 在链式 source 时错误拼接到工作区根目录，去寻找不存在的 `setup.sh/local_setup.sh`。
+  - 同时该环境污染会让本工作区 `install/setup.bash` 的 prefix 链解析异常，最终出现“构建成功但 overlay 未生效”。
+
+- **影响范围**
+  - 主要影响当前终端会话的 ROS 环境叠加顺序，不是 `dog2_motion_control` 包本体编译失败。
+
+- **建议修复（记录）**
+  1. 打开全新终端（或先 `unset COLCON_CURRENT_PREFIX`）。
+  2. 在工作区根目录执行：
+     - `source /opt/ros/humble/setup.bash`
+     - `colcon build --packages-select dog2_motion_control --symlink-install`
+     - `source /home/dell/aperfect/carbot_ws/install/setup.bash`
+  3. 验证：`echo $COLCON_CURRENT_PREFIX`（应为空或仅在脚本内部短暂使用）；`ros2 pkg list | grep dog2_motion_control` 应可见。
+
+- **备注**
+  - 若仍异常，检查是否误 `source` 了工作区根目录下不存在的 `setup.*`，以及 shell 启动脚本（`.zshrc`）是否写入了固定 `COLCON_CURRENT_PREFIX`。
+
+---
+
+## 2026-04-02 17:10 控制栈双架构重建（Position + MPC）
+
+- **目标**
+  - 在 `dog2_motion_control` 中形成可并行维护的双控制架构：
+    1. **Position 控制链路**（基础动作/调试/快速验证）
+    2. **MPC 控制链路**（模型预测控制主线）
+
+- **本轮落地**
+  - 新增并接入 MPC 控制节点实现：
+    - `dog2_motion_control/mpc_robot_controller.py`
+  - 补齐双启动入口：
+    - `launch/spider_gazebo_position.launch.py`
+    - `launch/spider_gazebo_mpc.launch.py`
+  - 配置侧新增控制器参数文件：
+    - `config/effort_controllers.yaml`
+  - `setup.py` 同步安装项与 console scripts，确保 Position/MPC 入口可被 `ros2 run/launch` 正确发现。
+
+- **架构意义**
+  - Position 作为“保底可跑通链路”，用于硬件映射、关节方向和基础步态调试。
+  - MPC 作为“性能/越障主链路”，用于后续约束优化、地形适配和稳定性提升。
+  - 两条链路共用同一套包与仿真场景，降低切换成本，支持快速 A/B 对比调参。
+
+- **后续建议**
+  1. 统一两条 launch 的参数命名与默认值来源（YAML 单一真源）。
+  2. 增加 `README` 运行矩阵（Position/MPC 启动命令、适用场景、预期话题）。
+  3. 为 MPC 链路补充最小闭环自检项（话题/控制器状态/关节命令频率）。
+
+## 2026-04-02 17:59 接触序列（trot）与 Swing 足端 PD 接入
+- **MPC 接触约束动态刷新**
+  - 文件：`src/dog2_motion_control/dog2_motion_control/mpc_robot_controller.py`
+  - 为 `ConvexMPC.solve` 新增 `contact_pred: (N,4)`，根据 stance/swing 动态更新各腿 `Fz_max`：stance=150N，swing=0N。
+- **摆动腿轨迹接管（Swing PD）**
+  - 在 `_on_control_timer` 内构建 trot 步态相位并生成 `contact_pred`。
+  - 当某腿为 swing 时叠加足端笛卡尔空间 PD，并使用抛物线 clearance 生成期望轨迹（抬升→落足）。
+- **Safe Fallback 退化机制一致性**
+  - OSQP 失败时使用“上一帧输入序列前移”fallback，并在 fallback 输出上强制执行当前 contact schedule（swing 腿力清零、stance 腿满足摩擦/推力幅值）。
+
+## 2026-04-02 20:57 最近工作补录（MPC 启动链路与仿真参数收口）
+- **启动入口与安装链路收口**
+  - 文件：`src/dog2_motion_control/setup.py`
+  - 完成新控制入口安装项对齐，确保 `mpc_robot_controller` 与双 launch 依赖的脚本入口在 `colcon build --symlink-install` 后可被正确发现。
+
+- **MPC/Position 双启动脚本并行化**
+  - 文件：
+    - `src/dog2_motion_control/launch/spider_gazebo_mpc.launch.py`
+    - `src/dog2_motion_control/launch/spider_gazebo_position.launch.py`
+  - 统一 Gazebo 仿真启动骨架，区分 Position 与 MPC 控制链路，便于同场景下快速 A/B 切换验证。
+
+- **控制器参数文件补齐**
+  - 文件：`src/dog2_motion_control/config/effort_controllers.yaml`
+  - 新增 effort 控制器配置，作为 MPC 链路的控制器参数来源，减少运行期硬编码。
+
+- **URDF 侧联调调整（配合控制链路验证）**
+  - 文件：`src/dog2_description/urdf/dog2.urdf.xacro`
+  - 按当前仿真联调需求继续小幅收敛模型参数，确保新启动链路下机器人可稳定进入控制循环。
+
+- **典型“反折腿/奇异点”死局定位与规避（仿真启动阶段）**
+  - **现象**：机器人一出生贴地或关节初始角接近直腿/错误象限时，MPC/WBC 想要产生向下支撑力，\( \tau = J^T F \) 在奇异/近奇异构型会把腿推向“膝盖朝上”的反折象限，形成力矩正反馈，越用力越折腿。
+  - **处置 1（优先）**：提高 spawn 初始高度（如 `-z 0.6~0.8`），让落地前 0.5~1s 有时间把腿收拢到“膝盖朝下”的可控象限，再切入 MPC。
+  - **处置 2**：站立/落足目标点（\(p_{des}\)）确保足端在 hip 正下方且 Z 轴深度足够（避免“脚尖目标过浅/过近”诱发反折）。
+  - **处置 3（硬防线）**：在 `dog2.urdf.xacro` 中对 `femur/tibia` 的 `limit lower/upper` 做物理可行域裁剪，禁止进入反折角区间，避免错误象限被控制力矩“掰进去”。
+
+- **当前状态**
+  - `dog2_motion_control` 已具备 Position/MPC 双入口与对应参数文件；下一步将重点做启动命令矩阵回归（控制器激活状态、关键话题与命令频率一致性）。
+
+## 2026-04-02 21:15 双 AI 并行开发隔离策略（按功能模块）
+
+- **结论**
+  - 可以同时使用两个 AI 并行开发 Position 与 MPC 两条链路。
+  - 但必须实施“文件级物理边界”，否则会在公共基础设施文件上发生覆盖冲突。
+
+- **危险区（公共文件，人工 Gatekeeper）**
+  - `src/dog2_description/urdf/dog2.urdf.xacro`
+  - `src/dog2_motion_control/setup.py`
+  - `src/dog2_visualization/CMakeLists.txt`
+  - `src/dog2_motion_control/package.xml`
+  - 规则：以上文件不允许任一 AI 直接自动修改；如需调整，先由 AI 给出 snippet，再由人工审阅并手动合入。
+
+- **安全区（可并行独立修改）**
+  - **Position 框架（AI-1 领地）**
+    - `src/dog2_motion_control/dog2_motion_control/spider_robot_controller.py`
+    - `src/dog2_motion_control/launch/spider_gazebo_position.launch.py`
+    - `src/dog2_motion_control/config/ros2_controllers.yaml`（若存在）
+  - **MPC 框架（AI-2 领地）**
+    - `src/dog2_motion_control/dog2_motion_control/mpc_robot_controller.py`
+    - `src/dog2_motion_control/config/effort_controllers.yaml`
+    - `src/dog2_motion_control/launch/spider_gazebo_mpc.launch.py`
+
+- **执行规则（双 AI 协作）**
+  1. **提示词隔离**：在每个 AI 会话首条消息明确“只允许修改的文件列表 + 禁改公共文件”。
+  2. **公共文件守门**：公共文件仅人工合入，不启用自动改写。
+  3. **高频 Git 快照**：每完成一个可运行小里程碑立即提交，保证可快速回滚。
+
+- **推荐提交粒度**
+  - `position:` 前缀用于旧链路增量。
+  - `mpc:` 前缀用于新链路增量。
+  - `infra:` 前缀用于公共文件人工合入（尽量小提交、可追溯）。
+
+- **备注**
+  - 当前仓库已具备 Position/MPC 双入口雏形，后续以“分区开发 + 人工守门 + 小步提交”作为默认协作模式。
+
+## 2026-04-02 21:37 Odom 闭环阻塞修复（桥接可用但无源数据场景）
+
+- **问题复盘**
+  - 现象：`mpc_controller` 持续告警 `No odometry received yet on '/odom'`，系统进入降级模式。
+  - 根因：Gazebo 的 `/world/empty/model/dog2/odometry` 在当前场景中存在话题端点但无稳定消息流，仅靠常规 `parameter_bridge` 不足以提供状态闭环。
+
+- **落地改动**
+  - 新增节点：`src/dog2_motion_control/dog2_motion_control/gz_pose_to_odom.py`
+    - 从 `/world/empty/dynamic_pose/info`（桥接为 `TFMessage`）提取 `dog2/base_link` 位姿。
+    - 通过有限差分估计 twist，发布 `nav_msgs/Odometry` 到 `/odom`。
+    - 增加鲁棒保护：`dt` 有效窗口、线速度/角速度限幅、twist 一阶低通、零时间戳回退到当前仿真时钟。
+  - 启动链路：`src/dog2_motion_control/launch/spider_gazebo_mpc.launch.py`
+    - 增加 `dynamic_pose` 桥接与 `gz_pose_to_odom` 启动。
+    - 保持 `odom_gz_topic`/`odom_topic` 参数化，MPC 侧统一订阅 `odom_topic`。
+  - 安装与依赖：
+    - `src/dog2_motion_control/setup.py` 增加 `gz_pose_to_odom` console script。
+    - `src/dog2_motion_control/package.xml` 增加 `nav_msgs`、`tf2_msgs` 依赖。
+
+- **验证结果**
+  - `colcon build --packages-select dog2_motion_control --symlink-install` 通过。
+  - 启动验证中可观察到：
+    - `gz_pose_to_odom ready ...`
+    - `Publishing MPC effort commands (odom='/odom', ...)`
+    - 不再出现 `No odometry received yet on '/odom'` 持续告警。
+
+---
+
+## 2026-04-03 14:36 Gazebo 出生姿态几何 + MPC 站立阶段抽搐定位
+
+- **现象**
+  - MPC 链路下，机器人在 Ignition Gazebo 中出生后机身仍然“卡在世界里”：四足被地面碰撞撑住，关节 PD 在 `mode=joint_pd_standup` 阶段缓慢把机身顶起并伴随明显抽搐。
+  - 日志侧确认 `joint_state_broadcaster` / `effort_controller` / `mpc_controller` 全部正常激活，`mpc_robot_controller` 周期性输出 `Publishing MPC effort commands (mode=joint_pd_standup, ...)`。
+
+- **工程改动 1：按 standing_pose 自动计算 spawn_z，并引出安全裕度参数**
+  - 文件：`src/dog2_motion_control/launch/spider_gazebo_mpc.launch.py`
+    - 利用 Pinocchio 从 `gait_params.yaml` 中的 `standing_pose`（当前基线：`hip_pitch=-0.3, knee_pitch=0.6`）构造 FreeFlyer+关节空间姿态，计算四足 `tibia_link` 在根坐标下的最小 z：`min_foot_z`。
+    - 将出生高度设为：`spawn_z = max(0.25, -min_foot_z + spawn_z_margin)`，并在启动日志中打印：
+      - `[spider_gazebo_mpc.launch] standing_pose spawn_z=0.462 m (min_foot_z=-0.452 m)`（当前基线）。
+    - 新增 launch 参数：
+      - `spawn_z_margin`（默认 `0.040`），便于在仿真中快速调高机身初始高度，例如：
+        - `ros2 launch dog2_motion_control spider_gazebo_mpc.launch.py use_gui:=true spawn_z_margin:=0.060`
+
+- **工程改动 2：MPC 站立阶段关节空间 PD 抽搐缓解**
+  - 文件：`src/dog2_motion_control/dog2_motion_control/mpc_robot_controller.py`
+    - 软化并重配站立/idle 阶段关节空间 PD 增益（只在 `mode=joint_pd_standup` / `idle_hold` 下生效）：
+      - rail: `kp=800.0, kd=140.0`
+      - coxa: `kp=40.0, kd=8.0`
+      - femur/tibia: `kp=70.0, kd=14.0`
+    - 新增 standup 防抽搐机制：
+      - 期望姿态 ramp：在 standup 阶段，将 `standing_pose` 目标从当前关节角以 `standup_ramp_time_sec`（默认 1.0s）线性过渡，避免在碰撞约束下立即施加大刚度拉回。
+      - 足端穿地检测：每周期用 Pinocchio 计算足端世界高度 `min_foot_world_z`，若低于阈值 `standup_penetration_foot_z_threshold_m`（默认 0.0），则对 PD 增益施加缩放：
+        - `kp ← kp * standup_penetration_kp_scale`（默认 0.35）
+        - `kd ← kd * standup_penetration_kd_scale`（默认 1.3）
+      - 相关新参数：
+        - `standup_ramp_time_sec`
+        - `standup_penetration_foot_z_threshold_m`
+        - `standup_penetration_kp_scale`
+        - `standup_penetration_kd_scale`
+    - 在 `_on_control_timer()` 中根据 `startup_elapsed_sec` 计算 `ramp_alpha`，并在非 `mpc_gait` 模式下通过 `_joint_space_hold_tau(...)` 组合：
+      - 重力补偿 + ramp 期望姿态 + 穿地自适应增益。
+
+- **当前状态与下一步**
+  - 经过上述几何与控制双侧收敛后，机器人出生时机身明显高于地面，且站立阶段关节 PD 不再出现强烈“拼命跺地板”现象，但在特定 spawn_z 组合下仍可观察到轻微抽搐。
+  - 下一步计划：
+    1. 继续通过 `spawn_z_margin` 做几何侧 A/B，找到“脚先落地、机身不过高”的舒适区间。
+    2. 在该区间内固定几何参数，仅通过 YAML/参数收紧 standup PD 增益，验证抽搐是否完全消失。
+    3. 待站立稳定后，再打开 `mpc_gait` 模式，检查接触切换（stance/swing）与 Swing 足端 PD 的配合情况。
+
+---
+
+## 2026-04-10 16:50 URDF 可视层去债（base_link 偏移清洗）+ Blender/DAE 工具链打通
+
+- **背景与目标**
+  - 在“CAD 原点历史偏移 + URDF 补偿层”并存的情况下，先执行最小风险去债：仅清洗 `base_link` 的 visual/collision 偏移，不触碰 joint 拓扑与惯性参数，避免引入“腿分离/轴心错位”。
+  - 目标是把 `base_link` 的可视层从“URDF 外部补偿”迁移为“网格内部吸收偏移”，为后续 `urdf_shift` 深度重构做准备。
+
+- **问题定位（本轮关键排障）**
+  - 在 `zsh` 下误 `source /opt/ros/humble/setup.bash` 会触发 `BASH_SOURCE` 兼容问题，出现错误路径拼接（尝试加载工作区根 `setup.sh`），导致 `ros2 pkg prefix` 与 xacro 查包异常。
+  - `collada_urdf` 工具链在 Ubuntu 包名为 `collada-urdf-tools`，且可执行文件默认不在 PATH（位于 `/usr/lib/collada_urdf/urdf_to_collada`）。
+  - `urdf_to_collada` 依赖 ROS1 风格包解析，若未设置 `ROS_PACKAGE_PATH`，会出现 `package 'dog2_description' not found` 并导致 mesh 资源加载失败（虽可生成 DAE，但几何可能缺失）。
+
+- **已执行操作**
+  - Blender 侧：
+    - 单独处理 `base_link` 网格，按反向偏移原则将原 URDF visual/collision 偏移量压入 STL。
+    - 导出新网格文件：`src/dog2_description/meshes/untitled.stl`（先不覆盖原 `base_link.STL`，用于安全 A/B）。
+  - URDF 侧：
+    - 文件：`src/dog2_description/urdf/dog2.urdf.xacro`
+    - 将 `base_link` 的 `<visual>/<collision>` origin 从 `-0.9780 0.87203 -0.2649` 改为 `0 0 0`。
+    - 临时将 mesh 引用从 `base_link.STL` 指向 `untitled.stl`，用于阶段性验证。
+  - 转换链路：
+    - xacro 展开时通过显式参数绕过 `$(find ...)` 依赖：
+      - `controllers_yaml:=/home/dell/aperfect/carbot_ws/src/dog2_description/config/ros2_controllers.yaml`
+    - DAE 生成命令：
+      - `export ROS_PACKAGE_PATH=/home/dell/aperfect/carbot_ws/src:${ROS_PACKAGE_PATH}`
+      - `/usr/lib/collada_urdf/urdf_to_collada /tmp/dog2.urdf /tmp/dog2.dae`
+    - 产物大小从约 `82K` 增长至约 `5.5M`，表明 mesh 资源已被正确解析并写入。
+
+- **阶段性结论**
+  - “骨架与皮肤分层”策略成立：只清洗 `base_link` visual/collision 层，不修改 joint origin，不会在理论上导致腿部拓扑分离。
+  - 当前改动属于“可逆验证态”：通过 `untitled.stl` 先做可视一致性验证，待验证通过后再回收为正式文件命名。
+
+- **下一步（已约定）**
+  1. 用 RViz/Gazebo 做 A/B：确认机身外观不瞬移、腿不分离、关节旋转行为不变。
+  2. 若通过：将 `untitled.stl` 收口替换 `base_link.STL`，并恢复 xacro mesh 文件名一致性。
+  3. 阶段 2 再处理 `urdf_shift` 去债（需全链路重基准，不与本轮混做）。
+  4. 阶段 3 进行动力学可信度审计（整机 CoM、惯量正定、轴心一致性）。
+
+---
+
+## 2026-04-10 20:00~21:00 URDF/mesh 偏移策略复盘与批处理尝试（对话记录工作量）
+
+- **核心产出**
+  - 明确并讲清 `base_footprint -> base_link -> (visual/collision)` 的“三层”关系，以及“骨架偏移 vs 皮肤偏移”的维护风险。
+  - 梳理 `visual origin`/`collision origin`/`inertial` 三者对“显示/碰撞/动力学”的影响边界（视觉不进动力学，但碰撞与惯量会）。
+  - 给出 Blender 多对象编辑与批量导出路径；并在实际操作中验证：对全部 STL 统一平移会导致腿/机身视觉分离（不能一刀切）。
+
+- **工程动作（实验性）**
+  - 新增并迭代批处理脚本：`src/dog2_description/scripts/batch_rebase_mesh_and_zero_origins.py`（用于批量平移 STL、尝试归零 origin）。
+  - 实测发现：直接写回 xacro 的 XML 会破坏 xacro 语义（`controllers_yaml` 解析异常）；已回退并恢复稳定启动。
+
+- **阶段性结论**
+  - 无 CAD 源时，mesh 去偏移应按 link/局部策略推进；避免“全局同一平移”这种会打散装配语义的操作。
+  - 后续若继续去债：优先在 CAD/Blender 侧消除网格自身偏移，再让 URDF 的 `base_footprint->base_link` 回归物理语义（尽量只保留 Z）。
+
+---
+
+## 2026-04-10 22:35 URDF 轴语义/前向定义对话收敛与回退记录
+
+- **本轮对话聚焦**
+  - 统一澄清 `origin rpy`（坐标系摆放）与 `axis xyz`（关节轴定义）的职责边界，以及其对 Jacobian/IK 推导复杂度的直接影响。
+  - 讨论并确认工程方向：将关节语义从“负轴+姿态补偿”逐步收敛到更易维护的统一坐标契约。
+
+- **已执行改动（对话内）**
+  - mesh 命名去歧义：将 `l1/l11/l111/...` 体系重命名为与 URDF link 对齐的语义名（`*_rail_link/*_coxa_link/*_femur_link/*_tibia_link` 及 collision 对应文件），并同步更新 `dog2.urdf.xacro` 引用。
+  - rail 语义尝试：将 `*_rail_joint` 轴改为 `axis="1 0 0"`，并按 `new_low=-old_up, new_up=-old_low` 同步调整四腿滑块限位，保证“向前伸出=正位移”的符号一致性。
+  - base 朝向实验：先后尝试调整 `base_offset_joint` 与 `base_link` mesh 旋转用于验证“视觉前向 vs TF 前向”关系。
+
+- **回退与当前状态**
+  - 按用户要求，已回退本轮“机身朝向实验”相关改动：
+    - `base_offset_joint` 恢复为 `rpy="0 0 ${PI_CONST}"`。
+    - `base_link` 的 visual/collision mesh 旋转恢复为 `rpy="0 0 0"`。
+  - 当前保留项：rail 轴语义与 mesh 语义命名改造仍在（未要求回退）。
+
+- **结论与后续建议**
+  - 启动链路实际读取的是 xacro（`view_dog2.launch.py`），排除了“编辑了 xacro 但运行 urdf”的路径偏差。
+  - 下一阶段建议按“先 rail、再旋转关节族、每步回归”推进，避免一次性全量改轴导致控制符号镜像风险。
+
+---
+
+## 2026-04-10 22:45 URDF 语义重构文件审查记录（9 文件）
+
+- **审查范围**
+  - `src/dog2_description/CMakeLists.txt`
+  - `src/dog2_description/scripts/check_joint_semantics.py`
+  - `src/dog2_description/scripts/check_urdf_shift_boundary.py`
+  - `src/dog2_description/urdf/dog2.urdf.xacro`
+  - `src/dog2_motion_control/dog2_motion_control/joint_semantics.py`
+  - `src/dog2_motion_control/dog2_motion_control/kinematics_solver.py`
+  - `src/dog2_motion_control/dog2_motion_control/leg_parameters.py`
+  - `src/dog2_motion_control/test/test_kinematics.py`
+  - `src/dog2_motion_control/test/test_rail_limits.py`
+
+- **审查结论**
+  - 本轮改动方向正确，核心目标“rail 语义统一（+q = base_link +X）”在 URDF、参数层、运动学层、测试层之间基本一致。
+  - mesh 命名从 `l1/l11/...` 切换到 `lf/lh/rh/rf_*_link` 的引用链完整，未发现明显漏改路径。
+
+- **已执行验证**
+  - `check_joint_semantics.py` 执行通过：`[PASS] Joint semantic checks passed.`
+  - `check_urdf_shift_boundary.py --strict` 执行通过：`[PASS] URDF shift boundary checks passed ...`
+
+- **残余风险/阻塞（非本轮新增）**
+  - 运行 `pytest` 时被既有问题阻塞：`test_joint_controller.py` 导入 `get_revolute_joint_name` 失败，导致无法完成该包全量用例采集。
+  - 该问题与本轮 9 文件语义改动无直接因果，但会影响“一键全绿”验证。
+
+- **建议下一步**
+  1. 保留当前语义改动，先完成 RViz/Gazebo 运行时拖动验证（四腿 rail +q 行为一致性）。
+  2. 单独修复 `test_joint_controller.py` 的导入问题后，再跑 `dog2_motion_control` 全量测试以完成回归闭环。

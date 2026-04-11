@@ -501,6 +501,14 @@ class SpiderRobotController(Node):
         self.config_loader.load()
         self._apply_config_joint_limits_to_ik()
 
+        # 关节限位的权威来源仍然是 leg_parameters/LEG_PARAMETERS；
+        # 这里在配置重载后刷新 JointController 内部的 clamp 表，避免后续扩展时出现脱节。
+        try:
+            if hasattr(self.joint_controller, "reload_joint_limits"):
+                self.joint_controller.reload_joint_limits()
+        except Exception as exc:
+            self.get_logger().warn(f"Failed to reload joint limits in JointController: {exc}")
+
         control_params = self.config_loader.get_control_params()
         self.max_rail_velocity_mps = float(control_params.get("max_rail_velocity", self.max_rail_velocity_mps))
         self.max_rail_velocity_mps = max(1e-6, self.max_rail_velocity_mps)
@@ -509,26 +517,28 @@ class SpiderRobotController(Node):
         self.get_logger().info(f"Config reloaded from {self.config_loader.config_path}")
 
     def _apply_config_joint_limits_to_ik(self):
-        """将YAML中的关节限位同步到IK参数，避免与LegParameters硬编码割裂。"""
+        """将YAML中的旋转关节限位同步到IK参数，避免与LegParameters硬编码割裂。
+
+        rail（导轨）方向性与 per-leg 限位仍以 leg_parameters 中的配置为准，
+        不在此处用单一 YAML 段统一覆盖，避免破坏前后腿/左右腿不同 rail 方向语义。
+        """
         joint_limits = self.config_loader.get_joint_limits()
-        rail_cfg = joint_limits.get("rail", {})
         haa_cfg = joint_limits.get("haa", {})
         hfe_cfg = joint_limits.get("hfe", {})
         kfe_cfg = joint_limits.get("kfe", {})
 
-        rail_limits = (float(rail_cfg["min"]), float(rail_cfg["max"]))
         coxa_limits = (float(haa_cfg["min"]), float(haa_cfg["max"]))
         femur_limits = (float(hfe_cfg["min"]), float(hfe_cfg["max"]))
         tibia_limits = (float(kfe_cfg["min"]), float(kfe_cfg["max"]))
 
         for leg_id, params in self.ik_solver.leg_params.items():
-            params.joint_limits["rail"] = rail_limits
             params.joint_limits["coxa"] = coxa_limits
             params.joint_limits["femur"] = femur_limits
             params.joint_limits["tibia"] = tibia_limits
             self.get_logger().info(
                 f"Applied IK limits for {leg_id}: "
-                f"rail={rail_limits}, coxa={coxa_limits}, femur={femur_limits}, tibia={tibia_limits}"
+                f"coxa={coxa_limits}, femur={femur_limits}, tibia={tibia_limits} "
+                f"(rail limits remain per-leg from leg_parameters)"
             )
 
     def _check_and_apply_config_update(self):

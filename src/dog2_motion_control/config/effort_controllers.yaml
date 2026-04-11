@@ -1,0 +1,65 @@
+# Effort-mode controller configuration for dog2 (Humble + gz_ros2_control).
+#
+# This file is loaded by the GazeboSimROS2ControlPlugin via the xacro argument
+# `controllers_yaml`. It must define controller_manager controllers and the
+# corresponding controller-specific parameters blocks.
+
+dog2_controller_manager:
+  ros__parameters:
+    update_rate: 1000
+    use_sim_time: true
+
+controller_manager:
+  ros__parameters:
+    update_rate: 1000  # Hz
+    use_sim_time: true
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    effort_controller:
+      type: effort_controllers/JointGroupEffortController
+
+# gz_ros2_control plugin parameters (applied by GazeboSimSystem).
+gz_ros_control:
+  ros__parameters:
+    hold_joints: true
+    position_proportional_gain: 1.0
+
+gz_ros2_control:
+  ros__parameters:
+    hold_joints: true
+    position_proportional_gain: 1.0
+
+joint_state_broadcaster:
+  ros__parameters:
+    publish_rate: 100.0
+
+effort_controller:
+  ros__parameters:
+    joints:
+      - lf_rail_joint
+      - lf_coxa_joint
+      - lf_femur_joint
+      - lf_tibia_joint
+
+      - lh_rail_joint
+      - lh_coxa_joint
+      - lh_femur_joint
+      - lh_tibia_joint
+
+      - rh_rail_joint
+      - rh_coxa_joint
+      - rh_femur_joint
+      - rh_tibia_joint
+
+      - rf_rail_joint
+      - rf_coxa_joint
+      - rf_femur_joint
+      - rf_tibia_joint
+
+    command_interfaces:
+      - effort
+    state_interfaces:
+      - position
+      - velocity

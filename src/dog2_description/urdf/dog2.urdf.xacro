@@ -26,15 +26,6 @@
   <xacro:property name="prismatic_effort" value="100"/>
   <xacro:property name="prismatic_velocity" value="5"/>
 
-  <!--
-    Simulation mass scaling factor for A/B testing.
-    Set to 1.0 for normal operation.
-    For the "divide by 4" comparison run, set to 0.25.
-    This value is provided by the URDF xacro launch mapping.
-  -->
-  <xacro:arg name="mass_scale" default="1.0"/>
-  <xacro:property name="mass_scale" value="$(arg mass_scale)"/>
-
   <!-- Shared angle constants -->
   <xacro:property name="PI_CONST" value="3.141592653589793"/>
   <xacro:property name="half_pi" value="1.5707963267948966"/>
@@ -62,6 +53,17 @@
   <xacro:property name="leg3_shin_xyz" value="-0.0265098183601649 -0.143524743603395 -0.0694046953395908"/>
   <xacro:property name="leg4_thigh_xyz" value="-0.026 -0.0760041259902766 0.0649874821212069"/>
   <xacro:property name="leg4_shin_xyz" value="-0.0265089672547710 -0.1429895138560395 -0.0691152554666486"/>
+
+  <!--
+    foot_tip_xyz (tibia_link frame): *_foot_fixed / 绿色调试球心位置（回退前工作区基准）。
+    YZ: L3 沿胫骨在 YZ 平面内方向；X: 向机身横向收拢（foot_tip_lateral_inboard_m）。
+    Z: foot_tip_z_down_m 为沿 -tibia Z 的累计下调量（球 r=0.012）；与 leg_parameters.FOOT_TIP_* 保持一致。
+  -->
+  <xacro:property name="foot_tip_lateral_inboard_m" value="0.024"/>
+  <xacro:property name="foot_tip_z_down_m" value="0.012"/>
+  <xacro:property name="leg12_foot_tip_xyz" value="${foot_tip_lateral_inboard_m} -0.269179 -0.142168"/>
+  <xacro:property name="leg3_foot_tip_xyz" value="-${foot_tip_lateral_inboard_m} -0.269179 -0.142168"/>
+  <xacro:property name="leg4_foot_tip_xyz" value="-${foot_tip_lateral_inboard_m} -0.269202 -0.142121"/>
 
   <!-- World and base -->
   <link name="base_footprint"/>
@@ -99,8 +101,8 @@
   <link name="base_link">
     <inertial>
       <origin xyz="0.2492 0.12503 0.0" rpy="${half_pi} 0 0"/>
-      <mass value="${mass_scale * 6.0}"/>
-      <inertia ixx="${mass_scale * 0.0153}" ixy="${mass_scale * 0.00011}" ixz="0" iyy="${mass_scale * 0.052}" iyz="0" izz="${mass_scale * 0.044}"/>
+      <mass value="6.0"/>
+      <inertia ixx="0.0153" ixy="0.00011" ixz="0" iyy="0.052" iyz="0" izz="0.044"/>
     </inertial>
     <visual>
       <origin xyz="-0.9780 0.87203 -0.2649" rpy="0 0 0"/>
@@ -125,7 +127,7 @@
   <xacro:property name="l4_inertia_xyz" value="0.0159999123716776 0.000737036465389251 0.0261570925915838"/>
 
   <!-- Leg macro -->
-  <xacro:macro name="leg" params="prefix leg_num xyz_x xyz_y xyz_z rpy p_low p_up thigh_xyz shin_xyz slider_inertia_xyz
+  <xacro:macro name="leg" params="prefix leg_num xyz_x xyz_y xyz_z rpy p_low p_up thigh_xyz shin_xyz slider_inertia_xyz foot_tip_xyz
                                  hip_rpy:='0 0 ${half_pi}' hip_xyz:='-0.016 0.0199 0.055'
                                  knee_xyz:='-0.0233 -0.055 0.0274'
                                  thigh_rpy:='0 0 0' thigh_col_rpy:='0 0 0'">
@@ -133,8 +135,8 @@
   <link name="${prefix}_rail_link">
     <inertial>
       <origin rpy="0 0 0" xyz="${slider_inertia_xyz}"/>
-      <mass value="${mass_scale * 0.3}"/>
-      <inertia ixx="${mass_scale * 0.0001071}" ixy="0" ixz="0" iyy="${mass_scale * 8.386e-05}" iyz="0" izz="${mass_scale * 7.869e-05}"/>
+      <mass value="0.3"/>
+      <inertia ixx="0.0001071" ixy="0" ixz="0" iyy="8.386e-05" iyz="0" izz="7.869e-05"/>
     </inertial>
     <visual>
       <geometry>
@@ -161,8 +163,8 @@
   <link name="${prefix}_coxa_link">
     <inertial>
       <origin rpy="0 0 0" xyz="-0.0233 -0.0383 0.000879"/>
-      <mass value="${mass_scale * 0.25}"/>
-      <inertia ixx="${mass_scale * 0.0001}" ixy="0" ixz="0" iyy="${mass_scale * 0.0001}" iyz="0" izz="${mass_scale * 0.0001}"/>
+      <mass value="0.25"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
     </inertial>
     <visual>
       <geometry>
@@ -189,8 +191,8 @@
   <link name="${prefix}_femur_link">
     <inertial>
       <origin rpy="0 0 0" xyz="${thigh_xyz}"/>
-      <mass value="${mass_scale * 0.4}"/>
-      <inertia ixx="${mass_scale * 0.000666}" ixy="0" ixz="0" iyy="${mass_scale * 0.000356}" iyz="${mass_scale * 0.000266}" izz="${mass_scale * 0.000534}"/>
+      <mass value="0.4"/>
+      <inertia ixx="0.000666" ixy="0" ixz="0" iyy="0.000356" iyz="0.000266" izz="0.000534"/>
     </inertial>
     <visual>
       <origin rpy="${thigh_rpy}" xyz="0 0 0"/>
@@ -219,8 +221,8 @@
   <link name="${prefix}_tibia_link">
     <inertial>
       <origin rpy="0 0 0" xyz="${shin_xyz}"/>
-      <mass value="${mass_scale * 0.5}"/>
-      <inertia ixx="${mass_scale * 0.004517}" ixy="${mass_scale * 0.0000087}" ixz="${mass_scale * 0.0000042}" iyy="${mass_scale * 0.000975}" iyz="${mass_scale * -0.001769}" izz="${mass_scale * 0.003666}"/>
+      <mass value="0.5"/>
+      <inertia ixx="0.004517" ixy="0.0000087" ixz="0.0000042" iyy="0.000975" iyz="-0.001769" izz="0.003666"/>
     </inertial>
     <visual>
       <geometry>
@@ -244,10 +246,28 @@
     <dynamics damping="${knee_damping}" friction="${knee_friction}"/>
   </joint>
 
-  <!--
-    Contact is currently attached to tibia as foot proxy.
-    TODO: split dedicated foot link/contact surface when available.
-  -->
+  <joint name="${prefix}_foot_fixed" type="fixed">
+    <origin rpy="0 0 0" xyz="${foot_tip_xyz}"/>
+    <parent link="${prefix}_tibia_link"/>
+    <child link="${prefix}_foot_link"/>
+  </joint>
+
+  <!-- foot_link: 足端坐标系 + 绿色小球 visual（调试用）。主碰撞仍在 tibia_link mesh。 -->
+  <link name="${prefix}_foot_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <mass value="0.04"/>
+      <inertia ixx="2.30e-06" ixy="0" ixz="0" iyy="2.30e-06" iyz="0" izz="2.30e-06"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <sphere radius="0.012"/>
+      </geometry>
+      <material name="mat_foot_debug"><color rgba="0.2 0.85 0.35 1"/></material>
+    </visual>
+  </link>
+
   <gazebo reference="${prefix}_tibia_link">
     <mu1>${foot_contact_mu1}</mu1>
     <mu2>${foot_contact_mu2}</mu2>
@@ -270,23 +290,27 @@
   -->
   <!-- Leg 1: Front Left (lf) base_link-local anchor -->
   <xacro:leg prefix="lf" leg_num="1" xyz_x="0.1246" xyz_y="0.0625" xyz_z="0.0" rpy="${half_pi} 0 0" p_low="-0.111" p_up="0.0"
-             thigh_xyz="${leg12_thigh_xyz}" shin_xyz="${leg12_shin_xyz}" slider_inertia_xyz="${l1_inertia_xyz}"/>
+             thigh_xyz="${leg12_thigh_xyz}" shin_xyz="${leg12_shin_xyz}" slider_inertia_xyz="${l1_inertia_xyz}"
+             foot_tip_xyz="${leg12_foot_tip_xyz}"/>
 
   <!-- Leg 2: Rear Left (lh) base_link-local anchor -->
   <xacro:leg prefix="lh" leg_num="2" xyz_x="0.3711" xyz_y="0.0625" xyz_z="0.0" rpy="${half_pi} 0 0" p_low="0.0" p_up="0.111"
              thigh_xyz="${leg12_thigh_xyz}" shin_xyz="${leg12_shin_xyz}" slider_inertia_xyz="${l2_inertia_xyz}"
-             hip_xyz="0.016 0.0199 0.055"/>
+             hip_xyz="0.016 0.0199 0.055"
+             foot_tip_xyz="${leg12_foot_tip_xyz}"/>
 
   <!-- Leg 3: Rear Right (rh) base_link-local anchor -->
   <xacro:leg prefix="rh" leg_num="3" xyz_x="0.3711" xyz_y="0.1825" xyz_z="0.0" rpy="${half_pi} 0 ${-pi}" p_low="-0.111" p_up="0.0"
              thigh_xyz="${leg3_thigh_xyz}" shin_xyz="${leg3_shin_xyz}" slider_inertia_xyz="${l3_inertia_xyz}"
-             hip_rpy="${pi} 0 ${half_pi}" knee_xyz="-0.0233 -0.055 -0.0254"/>
+             hip_rpy="${pi} 0 ${half_pi}" knee_xyz="-0.0233 -0.055 -0.0254"
+             foot_tip_xyz="${leg3_foot_tip_xyz}"/>
 
   <!-- Leg 4: Front Right (rf) base_link-local anchor -->
   <xacro:leg prefix="rf" leg_num="4" xyz_x="0.1291" xyz_y="0.1825" xyz_z="0.0" rpy="${half_pi} 0 ${-pi}" p_low="0.0" p_up="0.111"
              thigh_xyz="${leg4_thigh_xyz}" shin_xyz="${leg4_shin_xyz}" slider_inertia_xyz="${l4_inertia_xyz}"
              hip_rpy="${pi} 0 ${half_pi}" hip_xyz="0.0116 0.0199 0.055" knee_xyz="-0.0233 -0.055 -0.0254"
-             thigh_rpy="0 ${pi} 0" thigh_col_rpy="0 ${pi} 0"/>
+             thigh_rpy="0 ${pi} 0" thigh_col_rpy="0 ${pi} 0"
+             foot_tip_xyz="${leg4_foot_tip_xyz}"/>
 
   <!-- ROS 2 Control -->
   <ros2_control name="GazeboSimSystem" type="system">
@@ -378,9 +402,6 @@
   <gazebo>
     <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
       <parameters>${controllers_yaml}</parameters>
-      <!-- Keep consistent with ros2_controllers.yaml (gz_ros_control.ros__parameters.*). -->
-      <hold_joints>true</hold_joints>
-      <position_proportional_gain>1.0</position_proportional_gain>
       <robot_param>robot_description</robot_param>
       <robot_param_node>robot_state_publisher</robot_param_node>
     </plugin>

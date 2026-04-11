@@ -20,94 +20,22 @@ class TestRailLimits:
     def test_rail_within_limits_lf(self, solver):
         """测试前左腿导轨在限位内"""
         leg_id = 'lf'
-        target_pos = (1.0, -0.9, 0.0)
-        
-        # 前左腿导轨限位: [-0.111, 0.0]
-        # 测试在限位内的值
-        valid_offsets = [0.0, -0.05, -0.111]
-        
+        # 用 FK 自生成目标，避免硬编码世界坐标在足端 frame 变更后落入不可达区
+        q_demo = (0.0, 0.3, -0.5)
+        valid_offsets = [0.0, 0.05, 0.111]
         for rail_offset in valid_offsets:
-            joint_angles = solver.solve_ik(leg_id, target_pos, rail_offset=rail_offset)
-            # 在限位内应该有解（如果目标位置可达）
-            # 注意：可能因为工作空间限制而无解，但不应该因为导轨限位而无解
-            if joint_angles is None:
-                # 如果无解，尝试一个更容易达到的位置
-                target_pos_easy = (1.1, -0.85, -0.05)
-                joint_angles = solver.solve_ik(leg_id, target_pos_easy, rail_offset=rail_offset)
-            
-            # 至少对于某个合理的目标位置应该有解
-            assert joint_angles is not None or rail_offset == -0.111, \
-                f"导轨位移{rail_offset}在限位内，应该能找到某个可达位置"
+            foot = solver.solve_fk(leg_id, (rail_offset, *q_demo))
+            joint_angles = solver.solve_ik(leg_id, foot, rail_offset=rail_offset)
+            assert joint_angles is not None, (
+                f"导轨位移{rail_offset}在限位内，FK 目标应对应可达 IK 解"
+            )
     
     def test_rail_exceeds_upper_limit_lf(self, solver):
         """测试前左腿导轨超出上限"""
         leg_id = 'lf'
         target_pos = (1.0, -0.9, 0.0)
         
-        # 前左腿导轨上限: 0.0
-        # 测试超出上限的值
-        invalid_offsets = [0.001, 0.05, 0.1]
-        
-        for rail_offset in invalid_offsets:
-            joint_angles = solver.solve_ik(leg_id, target_pos, rail_offset=rail_offset)
-            assert joint_angles is None, \
-                f"导轨位移{rail_offset}超出上限0.0，应该返回None"
-    
-    def test_rail_exceeds_lower_limit_lf(self, solver):
-        """测试前左腿导轨超出下限"""
-        leg_id = 'lf'
-        target_pos = (1.0, -0.9, 0.0)
-        
-        # 前左腿导轨下限: -0.111
-        # 测试超出下限的值
-        invalid_offsets = [-0.112, -0.15, -0.2]
-        
-        for rail_offset in invalid_offsets:
-            joint_angles = solver.solve_ik(leg_id, target_pos, rail_offset=rail_offset)
-            assert joint_angles is None, \
-                f"导轨位移{rail_offset}超出下限-0.111，应该返回None"
-    
-    def test_rail_within_limits_rf(self, solver):
-        """测试前右腿导轨在限位内"""
-        leg_id = 'rf'
-        target_pos = (1.4, -0.9, 0.0)
-        
-        # 前右腿导轨限位: [0.0, 0.111]
-        # 测试在限位内的值
-        valid_offsets = [0.0, 0.05, 0.111]
-        
-        for rail_offset in valid_offsets:
-            joint_angles = solver.solve_ik(leg_id, target_pos, rail_offset=rail_offset)
-            # 在限位内应该有解（如果目标位置可达）
-            if joint_angles is None:
-                # 如果无解，尝试一个更容易达到的位置
-                target_pos_easy = (1.35, -0.85, -0.05)
-                joint_angles = solver.solve_ik(leg_id, target_pos_easy, rail_offset=rail_offset)
-            
-            # 至少对于某个合理的目标位置应该有解
-            assert joint_angles is not None or rail_offset == 0.111, \
-                f"导轨位移{rail_offset}在限位内，应该能找到某个可达位置"
-    
-    def test_rail_exceeds_lower_limit_rf(self, solver):
-        """测试前右腿导轨超出下限"""
-        leg_id = 'rf'
-        target_pos = (1.4, -0.9, 0.0)
-        
-        # 前右腿导轨下限: 0.0
-        # 测试超出下限的值
-        invalid_offsets = [-0.001, -0.05, -0.1]
-        
-        for rail_offset in invalid_offsets:
-            joint_angles = solver.solve_ik(leg_id, target_pos, rail_offset=rail_offset)
-            assert joint_angles is None, \
-                f"导轨位移{rail_offset}超出下限0.0，应该返回None"
-    
-    def test_rail_exceeds_upper_limit_rf(self, solver):
-        """测试前右腿导轨超出上限"""
-        leg_id = 'rf'
-        target_pos = (1.4, -0.9, 0.0)
-        
-        # 前右腿导轨上限: 0.111
+        # 前左腿导轨上限: 0.111
         # 测试超出上限的值
         invalid_offsets = [0.112, 0.15, 0.2]
         
@@ -116,11 +44,65 @@ class TestRailLimits:
             assert joint_angles is None, \
                 f"导轨位移{rail_offset}超出上限0.111，应该返回None"
     
+    def test_rail_exceeds_lower_limit_lf(self, solver):
+        """测试前左腿导轨超出下限"""
+        leg_id = 'lf'
+        target_pos = (1.0, -0.9, 0.0)
+        
+        # 前左腿导轨下限: 0.0
+        # 测试超出下限的值
+        invalid_offsets = [-0.001, -0.05, -0.2]
+        
+        for rail_offset in invalid_offsets:
+            joint_angles = solver.solve_ik(leg_id, target_pos, rail_offset=rail_offset)
+            assert joint_angles is None, \
+                f"导轨位移{rail_offset}超出下限0.0，应该返回None"
+    
+    def test_rail_within_limits_rf(self, solver):
+        """测试前右腿导轨在限位内"""
+        leg_id = 'rf'
+        q_demo = (0.0, 0.3, -0.5)
+        valid_offsets = [0.0, -0.05, -0.111]
+        for rail_offset in valid_offsets:
+            foot = solver.solve_fk(leg_id, (rail_offset, *q_demo))
+            joint_angles = solver.solve_ik(leg_id, foot, rail_offset=rail_offset)
+            assert joint_angles is not None, (
+                f"导轨位移{rail_offset}在限位内，FK 目标应对应可达 IK 解"
+            )
+    
+    def test_rail_exceeds_lower_limit_rf(self, solver):
+        """测试前右腿导轨超出下限"""
+        leg_id = 'rf'
+        target_pos = (1.4, -0.9, 0.0)
+        
+        # 前右腿导轨下限: -0.111
+        # 测试超出下限的值
+        invalid_offsets = [-0.112, -0.15, -0.2]
+        
+        for rail_offset in invalid_offsets:
+            joint_angles = solver.solve_ik(leg_id, target_pos, rail_offset=rail_offset)
+            assert joint_angles is None, \
+                f"导轨位移{rail_offset}超出下限-0.111，应该返回None"
+    
+    def test_rail_exceeds_upper_limit_rf(self, solver):
+        """测试前右腿导轨超出上限"""
+        leg_id = 'rf'
+        target_pos = (1.4, -0.9, 0.0)
+        
+        # 前右腿导轨上限: 0.0
+        # 测试超出上限的值
+        invalid_offsets = [0.001, 0.05, 0.2]
+        
+        for rail_offset in invalid_offsets:
+            joint_angles = solver.solve_ik(leg_id, target_pos, rail_offset=rail_offset)
+            assert joint_angles is None, \
+                f"导轨位移{rail_offset}超出上限0.0，应该返回None"
+    
     def test_rail_limits_all_legs(self, solver):
         """测试所有腿的导轨限位"""
         test_cases = {
-            'lf': {'limits': (-0.111, 0.0), 'valid': [0.0, -0.05], 'invalid': [0.01, -0.12]},
-            'rf': {'limits': (0.0, 0.111), 'valid': [0.0, 0.05], 'invalid': [-0.01, 0.12]},
+            'lf': {'limits': (0.0, 0.111), 'valid': [0.0, 0.05], 'invalid': [-0.01, 0.12]},
+            'rf': {'limits': (-0.111, 0.0), 'valid': [0.0, -0.05], 'invalid': [0.01, -0.12]},
             'lh': {'limits': (-0.111, 0.0), 'valid': [0.0, -0.05], 'invalid': [0.01, -0.12]},
             'rh': {'limits': (0.0, 0.111), 'valid': [0.0, 0.05], 'invalid': [-0.01, 0.12]},
         }
@@ -144,14 +126,14 @@ class TestRailLimits:
         """测试导轨边界值"""
         # 测试精确的边界值
         test_cases = [
-            ('lf', -0.111, True),   # 前左腿下限（边界内）
-            ('lf', 0.0, True),      # 前左腿上限（边界内）
-            ('lf', -0.1110001, False),  # 前左腿下限外
-            ('lf', 0.0000001, False),   # 前左腿上限外
-            ('rf', 0.0, True),      # 前右腿下限（边界内）
-            ('rf', 0.111, True),    # 前右腿上限（边界内）
-            ('rf', -0.0000001, False),  # 前右腿下限外
-            ('rf', 0.1110001, False),   # 前右腿上限外
+            ('lf', 0.0, True),      # 前左腿下限（边界内）
+            ('lf', 0.111, True),    # 前左腿上限（边界内）
+            ('lf', -0.0000001, False),  # 前左腿下限外
+            ('lf', 0.1110001, False),   # 前左腿上限外
+            ('rf', -0.111, True),   # 前右腿下限（边界内）
+            ('rf', 0.0, True),      # 前右腿上限（边界内）
+            ('rf', -0.1110001, False),  # 前右腿下限外
+            ('rf', 0.0000001, False),   # 前右腿上限外
         ]
         
         for leg_id, rail_offset, should_pass_limit_check in test_cases:

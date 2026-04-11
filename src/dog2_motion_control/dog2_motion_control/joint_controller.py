@@ -143,6 +143,18 @@ class JointController:
             self.node.get_logger().error(f"Failed to load joint limits: {e}")
             self.joint_limits = {}
             raise
+
+    def reload_joint_limits(self) -> None:
+        """从 LEG_PARAMETERS 刷新关节限位映射表。
+
+        当前阶段关节限位的权威来源仍然是 leg_parameters.py 中的 LEG_PARAMETERS；
+        当几何/模型更新后，可调用该方法在不重启节点的情况下刷新 clamp 范围。
+        """
+        try:
+            self._load_joint_limits()
+            self.node.get_logger().info("Joint limits reloaded from LEG_PARAMETERS.")
+        except Exception as e:
+            self.node.get_logger().error(f"Failed to reload joint limits: {e}")
     
     def _joint_state_callback(self, msg: JointState) -> None:
         self.last_joint_state_time = self.node.get_clock().now()
