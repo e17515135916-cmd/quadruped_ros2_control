@@ -1,0 +1,159 @@
+robot:
+  name: "custom_quadruped_with_sliding_rail"
+  model_path: "../../src/dog2_description/urdf/dog2.urdf.xacro"
+  base_link: "base_link"
+  simulator: "diagnostic_only"
+  xacro_args:
+    controllers_yaml: "../../src/dog2_description/config/ros2_controllers.yaml"
+
+# This robot has one prismatic rail per leg in the current URDF.  Keep
+# joint_name for single-rail robots; use joint_names when multiple rails must be
+# locked independently.
+rail:
+  enabled: true
+  joint_name: ""
+  joint_names:
+    - "lf_rail_joint"
+    - "lh_rail_joint"
+    - "rh_rail_joint"
+    - "rf_rail_joint"
+  lock_in_walking: true
+  lock_position_source: "initial"
+  lock_position: 0.0
+
+legs:
+  FL:
+    foot_link: "lf_foot_link"
+    joint_names:
+      - "lf_coxa_joint"
+      - "lf_femur_joint"
+      - "lf_tibia_joint"
+    joint_sign:
+      - 1
+      - 1
+      - 1
+    joint_offset:
+      - 0.0
+      - 0.0
+      - 0.0
+    default_stand_q:
+      - 0.0
+      - -0.3
+      - -0.6
+    hip_frame:
+      parent: "base_link"
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+      needs_manual_confirmation: true
+    joint_limit:
+      lower: [-2.618, -2.8, -2.8]
+      upper: [2.618, 2.8, 2.8]
+    torque_limit:
+      - 18.0
+      - 18.0
+      - 18.0
+    pd_gain:
+      kp: [20.0, 20.0, 20.0]
+      kd: [0.8, 0.8, 0.8]
+
+  FR:
+    foot_link: "rf_foot_link"
+    joint_names:
+      - "rf_coxa_joint"
+      - "rf_femur_joint"
+      - "rf_tibia_joint"
+    joint_sign:
+      - 1
+      - 1
+      - 1
+    joint_offset:
+      - 0.0
+      - 0.0
+      - 0.0
+    default_stand_q:
+      - 0.0
+      - -0.3
+      - -0.6
+    hip_frame:
+      parent: "base_link"
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+      needs_manual_confirmation: true
+    joint_limit:
+      lower: [-2.618, -2.8, -2.8]
+      upper: [2.618, 2.8, 2.8]
+    torque_limit:
+      - 18.0
+      - 18.0
+      - 18.0
+    pd_gain:
+      kp: [20.0, 20.0, 20.0]
+      kd: [0.8, 0.8, 0.8]
+
+  RL:
+    foot_link: "lh_foot_link"
+    joint_names:
+      - "lh_coxa_joint"
+      - "lh_femur_joint"
+      - "lh_tibia_joint"
+    joint_sign:
+      - 1
+      - 1
+      - 1
+    joint_offset:
+      - 0.0
+      - 0.0
+      - 0.0
+    default_stand_q:
+      - 0.0
+      - -0.3
+      - -0.6
+    hip_frame:
+      parent: "base_link"
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+      needs_manual_confirmation: true
+    joint_limit:
+      lower: [-2.618, -2.8, -2.8]
+      upper: [2.618, 2.8, 2.8]
+    torque_limit:
+      - 18.0
+      - 18.0
+      - 18.0
+    pd_gain:
+      kp: [20.0, 20.0, 20.0]
+      kd: [0.8, 0.8, 0.8]
+
+  RR:
+    foot_link: "rh_foot_link"
+    joint_names:
+      - "rh_coxa_joint"
+      - "rh_femur_joint"
+      - "rh_tibia_joint"
+    joint_sign:
+      - 1
+      - 1
+      - 1
+    joint_offset:
+      - 0.0
+      - 0.0
+      - 0.0
+    default_stand_q:
+      - 0.0
+      - -0.3
+      - -0.6
+    hip_frame:
+      parent: "base_link"
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+      needs_manual_confirmation: true
+    joint_limit:
+      lower: [-2.618, -2.8, -2.8]
+      upper: [2.618, 2.8, 2.8]
+    torque_limit:
+      - 18.0
+      - 18.0
+      - 18.0
+    pd_gain:
+      kp: [20.0, 20.0, 20.0]
+      kd: [0.8, 0.8, 0.8]

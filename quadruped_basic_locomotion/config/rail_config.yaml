@@ -1,0 +1,22 @@
+rail_lock:
+  enabled: true
+  lock_in_walking: true
+  lock_position_source: "initial"
+  lock_position: 0.0
+  warning_error_threshold_m: 0.002
+  safety_error_threshold_m: 0.010
+  log_every_cycle: true
+
+  # If the simulator exposes a true joint-lock constraint, use it outside this
+  # generic controller.  Otherwise this controller provides effort/force PD.
+  prefer_physical_constraint: true
+  fallback_mode: "high_stiffness_pd"
+
+rail_pd:
+  kp: 3000.0
+  kd: 80.0
+  max_force: 500.0
+
+debug:
+  gui_show_locked_state: true
+  print_status_hz: 10.0
