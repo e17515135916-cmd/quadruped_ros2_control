@@ -26,6 +26,7 @@ class RailLockConfig:
     lock_in_walking: bool = True
     lock_position_source: str = "initial"
     lock_position: float = 0.0
+    lock_position_map: Mapping[str, float] | None = None
     kp: float = 3000.0
     kd: float = 80.0
     max_force: float = 500.0
@@ -138,6 +139,10 @@ class RailLockController:
             lock_in_walking=bool(merged.get("lock_in_walking", True)),
             lock_position_source=str(merged.get("lock_position_source", "initial")),
             lock_position=_as_float(merged.get("lock_position", 0.0)),
+            lock_position_map={
+                str(name): _as_float(value)
+                for name, value in (merged.get("lock_position_map", {}) or {}).items()
+            },
             kp=_as_float(rail_pd.get("kp", merged.get("kp", 3000.0)), 3000.0),
             kd=_as_float(rail_pd.get("kd", merged.get("kd", 80.0)), 80.0),
             max_force=_as_float(rail_pd.get("max_force", merged.get("max_force", 500.0)), 500.0),
@@ -189,7 +194,10 @@ class RailLockController:
         lock_positions: Dict[str, float] = {}
         for joint_name in self.config.joint_names:
             if self.config.lock_position_source == "configured":
-                q0 = self.config.lock_position
+                if self.config.lock_position_map and joint_name in self.config.lock_position_map:
+                    q0 = self.config.lock_position_map[joint_name]
+                else:
+                    q0 = self.config.lock_position
             else:
                 if joint_name not in joint_state:
                     raise KeyError(f"Missing initial rail joint state for {joint_name}")

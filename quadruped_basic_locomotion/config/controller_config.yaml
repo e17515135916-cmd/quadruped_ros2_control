@@ -1,0 +1,39 @@
+controller:
+  control_dt: 0.002
+  duration: 10.0
+  transition_time: 1.5
+  initial_base_height: 0.42
+  gui_sleep: true
+  # PyBullet dynamics is first brought up with its internal joint position
+  # servo.  The explicit torque-PD path is still implemented as "torque_pd",
+  # but this custom URDF needs a stable contact/kinematics baseline before
+  # force-only gain tuning.
+  actuator_mode: "pybullet_position"
+  pybullet_position_gain: 0.35
+  pybullet_velocity_gain: 0.08
+  debug_base_attitude_assist: true
+  debug_base_attitude_kp: 4.0
+  debug_base_attitude_kd: 0.35
+  debug_base_velocity_assist: true
+  debug_base_velocity_kp: 20.0
+  debug_base_velocity_max_force: 3.0
+
+joint_pd:
+  default_kp: 80.0
+  default_kd: 2.0
+  max_q_des_change_per_step: 0.03
+  torque_limit_default: 80.0
+
+safety:
+  max_roll_deg: 20.0
+  max_pitch_deg: 20.0
+  stand_accept_roll_deg: 10.0
+  stand_accept_pitch_deg: 10.0
+  min_base_height: 0.12
+  joint_limit_tolerance: 0.002
+  max_joint_velocity: 25.0
+  max_torque_ratio: 1.05
+  rail_error_safety_m: 0.010
+  min_stance_legs: 2
+  max_ik_failures: 5
+  max_foot_target_jump_m: 0.05

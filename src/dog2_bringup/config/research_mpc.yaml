@@ -5,21 +5,24 @@ mpc_node_complete:
     dt: 0.05
     control_frequency: 20.0
     mode: hover
-    nominal_body_height: 0.40
+    nominal_body_height: 0.16
     default_stance_length: 0.40
     default_stance_width: 0.30
     enable_sliding_constraints: true
-    rail_tracking_error_threshold: 0.005
+    rail_tracking_error_threshold: 0.020
     support_polygon_margin_threshold: 0.015
     crossing_transition_stable_time: 0.15
     slack_linear_weight: 5000.0
     vertical_support_enabled: true
-    vertical_support_target_height: 0.40
-    vertical_support_kp: 700.0
-    vertical_support_kd: 90.0
-    vertical_support_min_total_force_multiplier: 1.20
-    vertical_support_max_leg_force: 100.0
-    vertical_support_height_error_limit: 0.25
+    vertical_support_target_height: 0.16
+    vertical_support_kp: 350.0
+    vertical_support_kd: 60.0
+    vertical_support_min_total_force_multiplier: 1.08
+    vertical_support_max_leg_force: 75.0
+    vertical_support_height_error_limit: 0.12
+    hover_force_sanitize_enabled: false
+    hover_force_max_leg_fz: 55.0
+    hover_force_min_leg_fz: 18.0
     attitude_support_enabled: true
     attitude_support_roll_target: 0.0
     attitude_support_pitch_target: 0.0
@@ -27,8 +30,20 @@ mpc_node_complete:
     attitude_support_roll_kd: 12.0
     attitude_support_pitch_kp: 140.0
     attitude_support_pitch_kd: 18.0
-    attitude_support_max_leg_delta: 24.0
-    crossing_forward_assist_enabled: true
+    attitude_support_max_leg_delta: 18.0
+    crossing_approach_speed: 0.05
+    crossing_forward_assist_enabled: false
     crossing_forward_assist_force_per_leg: 14.0
+    crossing_forward_assist_pre_approach_enabled: false
     crossing_force_full_support: false
     crossing_freeze_rail_targets: false
+    bfs_rail_ramp_enabled: true
+    bfs_rail_ramp_rate: 0.015
+    bfs_rail_ramp_slow_scale: 0.25
+    bfs_attitude_gate_roll: 0.30
+    bfs_attitude_gate_pitch: 0.25
+    bfs_attitude_gate_tilt: 0.40
+    bfs_attitude_gate_up_z: 0.85
+    bfs_attitude_gate_angular_rate: 1.20
+    bfs_min_body_z_for_ramp: 0.080
+    bfs_hard_fail_body_z: 0.055

@@ -5,7 +5,7 @@ from typing import Optional
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, String
 
 
 class WBCEffortMux(Node):
@@ -21,7 +21,13 @@ class WBCEffortMux(Node):
         self.declare_parameter("command_timeout_sec", 0.25)
         self.declare_parameter("debug_enabled", True)
         self.declare_parameter("debug_log_period_sec", 1.0)
+        self.declare_parameter("publish_safe_zero_on_stale", False)
         self.declare_parameter("freeze_rail_effort", False)
+        self.declare_parameter("freeze_rail_effort_in_hover", False)
+        self.declare_parameter("freeze_rail_effort_in_walking", False)
+        self.declare_parameter("freeze_rail_effort_in_crossing_staging", False)
+        self.declare_parameter("freeze_rail_effort_on_flat", False)
+        self.declare_parameter("crossing_state_topic", "/dog2/mpc/crossing_state")
 
         self._joint_effort_topic = str(self.get_parameter("joint_effort_topic").value)
         self._rail_effort_topic = str(self.get_parameter("rail_effort_topic").value)
@@ -31,11 +37,30 @@ class WBCEffortMux(Node):
         self._debug_enabled = bool(self.get_parameter("debug_enabled").value)
         self._debug_log_period_sec = max(0.1, float(self.get_parameter("debug_log_period_sec").value))
         self._freeze_rail_effort = bool(self.get_parameter("freeze_rail_effort").value)
+        self._freeze_rail_effort_in_hover = bool(
+            self.get_parameter("freeze_rail_effort_in_hover").value
+        )
+        self._freeze_rail_effort_in_walking = bool(
+            self.get_parameter("freeze_rail_effort_in_walking").value
+        )
+        self._freeze_rail_effort_in_crossing_staging = bool(
+            self.get_parameter("freeze_rail_effort_in_crossing_staging").value
+        )
+        self._freeze_rail_effort_on_flat = bool(
+            self.get_parameter("freeze_rail_effort_on_flat").value
+        )
+        self._crossing_state_topic = str(
+            self.get_parameter("crossing_state_topic").value
+        )
+        self._publish_safe_zero_on_stale = bool(
+            self.get_parameter("publish_safe_zero_on_stale").value
+        )
 
         self._joint_cmd: Optional[np.ndarray] = None
         self._rail_cmd: Optional[np.ndarray] = None
         self._joint_stamp_ns: Optional[int] = None
         self._rail_stamp_ns: Optional[int] = None
+        self._crossing_state = "UNKNOWN"
         self._published_safe_zero = False
         self._last_debug_log_ns: int = 0
 
@@ -45,16 +70,25 @@ class WBCEffortMux(Node):
         self._rail_sub = self.create_subscription(
             Float64MultiArray, self._rail_effort_topic, self._on_rail_effort, 10
         )
+        self._crossing_state_sub = self.create_subscription(
+            String, self._crossing_state_topic, self._on_crossing_state, 10
+        )
         self._pub = self.create_publisher(Float64MultiArray, self._output_topic, 10)
         self._timer = self.create_timer(max(1.0 / publish_rate_hz, 0.001), self._on_timer)
 
         self.get_logger().info(
-            "wbc_effort_mux ready: joint='%s', rail='%s', output='%s', freeze_rail_effort=%s'"
+            "wbc_effort_mux ready: joint='%s', rail='%s', output='%s', freeze_rail_effort=%s, "
+            "freeze_hover=%s, freeze_walking=%s, freeze_staging=%s, freeze_flat=%s, state_topic='%s'"
             % (
                 self._joint_effort_topic,
                 self._rail_effort_topic,
                 self._output_topic,
                 self._freeze_rail_effort,
+                self._freeze_rail_effort_in_hover,
+                self._freeze_rail_effort_in_walking,
+                self._freeze_rail_effort_in_crossing_staging,
+                self._freeze_rail_effort_on_flat,
+                self._crossing_state_topic,
             )
         )
 
@@ -75,6 +109,9 @@ class WBCEffortMux(Node):
         self._rail_cmd = np.asarray(msg.data, dtype=float)
         self._rail_stamp_ns = self._now_ns()
 
+    def _on_crossing_state(self, msg: String) -> None:
+        self._crossing_state = str(msg.data)
+
     def _is_fresh(self, stamp_ns: Optional[int]) -> bool:
         if stamp_ns is None:
             return False
@@ -93,6 +130,27 @@ class WBCEffortMux(Node):
         msg = Float64MultiArray()
         msg.data = data
         self._pub.publish(msg)
+
+    def _should_freeze_rail_effort(self) -> bool:
+        if self._freeze_rail_effort:
+            return True
+        if self._freeze_rail_effort_on_flat and self._crossing_state in (
+            "HOVER",
+            "WALKING",
+            "FLAT_GAIT_DEMO",
+        ):
+            return True
+        if self._freeze_rail_effort_in_hover and self._crossing_state == "HOVER":
+            return True
+        if self._freeze_rail_effort_in_walking and self._crossing_state == "WALKING":
+            return True
+        if (
+            self._freeze_rail_effort_in_crossing_staging
+            and self._crossing_state
+            in ("CROSSING:PRE_APPROACH", "CROSSING:APPROACH")
+        ):
+            return True
+        return False
 
     def _log_effort_breakdown(self, effort: np.ndarray) -> None:
         if not self._debug_enabled:
@@ -131,7 +189,9 @@ class WBCEffortMux(Node):
 
         if self._is_fresh(self._joint_stamp_ns) and self._is_fresh(self._rail_stamp_ns):
             rail_cmd = (
-                np.zeros_like(self._rail_cmd) if self._freeze_rail_effort else self._rail_cmd
+                np.zeros_like(self._rail_cmd)
+                if self._should_freeze_rail_effort()
+                else self._rail_cmd
             )
             effort = np.asarray(
                 self._compose_effort_command(self._joint_cmd, rail_cmd), dtype=float
@@ -141,13 +201,33 @@ class WBCEffortMux(Node):
             self._published_safe_zero = False
             return
 
-        if not self._published_safe_zero:
+        stale_joint = not self._is_fresh(self._joint_stamp_ns)
+        stale_rail = not self._is_fresh(self._rail_stamp_ns)
+        if stale_joint:
+            self.get_logger().error(
+                f"WBC joint effort stream stale (topic={self._joint_effort_topic})",
+                throttle_duration_sec=1.0,
+            )
+        if stale_rail:
+            self.get_logger().error(
+                f"WBC rail effort stream stale (topic={self._rail_effort_topic})",
+                throttle_duration_sec=1.0,
+            )
+
+        if self._publish_safe_zero_on_stale:
+            if not self._published_safe_zero:
+                self.get_logger().warn(
+                    "safe zero enabled: publishing zero effort on stale stream",
+                    throttle_duration_sec=2.0,
+                )
+                self._published_safe_zero = True
+            effort = np.zeros(16, dtype=float)
+            self._publish(effort.tolist())
+        else:
             self.get_logger().warn(
-                "WBC effort streams are stale; publishing safe zero effort once.",
+                "WBC effort streams stale, no safe zero published (exposing true behavior)",
                 throttle_duration_sec=2.0,
             )
-            self._publish([0.0] * 16)
-            self._published_safe_zero = True
 
 
 def main() -> None:

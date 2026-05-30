@@ -1,8 +1,18 @@
 #include "dog2_mpc/mpc_controller.hpp"
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <iostream>
 
 namespace dog2_mpc {
+
+static double moveTowards(double current, double target, double max_step) {
+    const double diff = target - current;
+    if (std::abs(diff) <= max_step) {
+        return target;
+    }
+    return current + std::copysign(max_step, diff);
+}
 
 MPCController::MPCController(double mass,
                              const Eigen::Matrix3d& inertia,
@@ -12,6 +22,20 @@ MPCController::MPCController(double mass,
       sliding_velocity_(Eigen::Vector4d::Zero()),
       crossing_enabled_(false),
       freeze_crossing_rail_targets_(false),
+      bfs_rail_ramp_enabled_(true),
+      bfs_rail_gate_freeze_(false),
+      bfs_rail_ramp_rate_scale_(1.0),
+      bfs_rail_ramp_rate_(0.015),
+      bfs_rail_ref_initialized_(false),
+      bfs_rail_ref_(Eigen::Vector4d::Zero()),
+      bfs_rail_start_(Eigen::Vector4d::Zero()),
+      last_crossing_stage_(CrossingStateMachine::CrossingState::APPROACH),
+      level_attitude_valid_(false),
+      level_roll_(0.0),
+      level_pitch_(0.0),
+      level_tilt_(0.0),
+      body_up_z_(1.0),
+      measured_leg_configs_valid_(false),
       last_solve_time_(0.0),
       last_solve_status_(-1),
       initialized_(false) {
@@ -88,6 +112,35 @@ void MPCController::setCrossingGuardParams(double rail_tracking_error_threshold,
 
 void MPCController::setSlackLinearWeight(double slack_linear_weight) {
     current_slack_weight_ = slack_linear_weight;
+}
+
+void MPCController::setCrossingBfsRailGate(bool enabled,
+                                           bool freeze,
+                                           double ramp_rate_scale,
+                                           double ramp_rate) {
+    bfs_rail_ramp_enabled_ = enabled;
+    bfs_rail_gate_freeze_ = freeze;
+    bfs_rail_ramp_rate_scale_ = std::max(0.0, std::min(1.0, ramp_rate_scale));
+    bfs_rail_ramp_rate_ = std::max(0.0, ramp_rate);
+}
+
+void MPCController::setLevelAttitudeState(bool valid,
+                                          double level_roll,
+                                          double level_pitch,
+                                          double level_tilt,
+                                          double body_up_z) {
+    level_attitude_valid_ = valid;
+    level_roll_ = level_roll;
+    level_pitch_ = level_pitch;
+    level_tilt_ = level_tilt;
+    body_up_z_ = body_up_z;
+}
+
+void MPCController::setMeasuredLegConfigurations(
+    const std::array<CrossingStateMachine::LegConfiguration, 4>& configs,
+    bool valid) {
+    measured_leg_configs_ = configs;
+    measured_leg_configs_valid_ = valid;
 }
 
 bool MPCController::solve(const Eigen::VectorXd& x0, Eigen::VectorXd& u_optimal) {
@@ -213,10 +266,13 @@ void MPCController::buildQP(const Eigen::VectorXd& x0,
     const bool crossing_approach =
         crossing_enabled_ && crossing_state_machine_ &&
         crossing_state_machine_->getCurrentState() == CrossingStateMachine::CrossingState::APPROACH;
+    const bool rail_targets_frozen =
+        freeze_crossing_rail_targets_ ||
+        (bfs_rail_ramp_enabled_ && bfs_rail_gate_freeze_);
     const bool use_soft_rail_bounds = crossing_enabled_ && crossing_state_machine_ &&
                                        params_.enable_sliding_constraints &&
                                        !crossing_approach &&
-                                       !freeze_crossing_rail_targets_;
+                                       !rail_targets_frozen;
     const int num_rail_slack = use_soft_rail_bounds ? 8 : 0;  // 4 lower + 4 upper
     
     // 优化变量: z = [x_1, u_0, x_2, u_1, ..., x_N, u_{N-1}]
@@ -435,15 +491,39 @@ std::vector<Eigen::VectorXd> MPCController::generateCrossingReference(
     // 根据越障状态生成不同的参考轨迹
     switch (crossing_state) {
         case CrossingStateMachine::CrossingState::APPROACH: {
-            // 接近阶段：正常Trot步态
-            Eigen::Vector3d desired_velocity(0.2, 0.0, 0.0);  // 0.2 m/s前进
-            auto gait_state = hybrid_gait_generator_->generateNormalTrotGait(current_state, desired_velocity, dt);
-            
+            // Active crossing approach must be quasi-static. A trot reference here
+            // keeps pushing while the body is still settling and amplifies roll.
+            constexpr double creep_speed = 0.03;  // m/s
+            const double current_x = current_state.position.x();
+            const double target_x = target_state.position.x();
+            const double direction = (target_x >= current_x) ? 1.0 : -1.0;
+
             for (int k = 0; k < params_.horizon; ++k) {
-                crossing_ref[k].segment<3>(0) = gait_state.com_target;  // 位置
-                crossing_ref[k].segment<3>(3) = target_state.orientation;  // 姿态
-                crossing_ref[k].segment<3>(6) = gait_state.com_velocity_target;  // 线速度
-                crossing_ref[k].segment<3>(9).setZero();  // 角速度
+                const double step = creep_speed * dt * static_cast<double>(k + 1);
+                const double remaining = std::abs(target_x - current_x);
+                const double x_ref = current_x + direction * std::min(step, remaining);
+
+                crossing_ref[k].segment<3>(0) = current_state.position;
+                crossing_ref[k](0) = x_ref;
+                crossing_ref[k](1) = target_state.position.y();
+                crossing_ref[k](2) = target_state.position.z();
+                crossing_ref[k].segment<3>(3) = target_state.orientation;
+                crossing_ref[k].segment<3>(6).setZero();
+                if (remaining > 1e-4) {
+                    crossing_ref[k](6) = direction * creep_speed;
+                }
+                crossing_ref[k].segment<3>(9).setZero();
+            }
+
+            static int approach_log_count = 0;
+            if (++approach_log_count % 20 == 0) {
+                std::cout << "[MPCController] APPROACH quasi-static creep"
+                          << " x=" << current_x
+                          << " target_x=" << target_x
+                          << " vx_ref=" << (direction * creep_speed)
+                          << " roll=" << current_state.orientation.x()
+                          << " pitch=" << current_state.orientation.y()
+                          << std::endl;
             }
             break;
         }
@@ -512,39 +592,51 @@ void MPCController::updateCrossingState(const Eigen::VectorXd& x0) {
     robot_state.velocity = x0.segment<3>(6);
     robot_state.orientation = x0.segment<3>(3);
     robot_state.angular_velocity = x0.segment<3>(9);
+    robot_state.level_attitude_valid = level_attitude_valid_;
+    robot_state.level_roll = level_roll_;
+    robot_state.level_pitch = level_pitch_;
+    robot_state.level_tilt = level_tilt_;
+    robot_state.body_up_z = body_up_z_;
     
     // 滑动副状态：16D 扩展状态中滑动副位置在 [12..15]
     robot_state.sliding_positions = ExtendedSRBDModel::extractSlidingPositions(x0);
     robot_state.sliding_velocities = sliding_velocity_;
 
-    // 腿部构型：为了闭环状态机 completion guards，使用当前 stage 的“期望构型”填充 leg_configs
-    // （这样 guard 不会因为 leg_configs 未同步而永远无法触发）
-    const auto stage = crossing_state_machine_->getCurrentState();
-    for (int i = 0; i < 4; ++i) {
-        bool is_front_leg = (i == 0 || i == 3);
+    // 腿部构型：优先使用真实测量值（通过 setMeasuredLegConfigurations 注入）
+    // 仅在测量值无效时，才 fallback 到 stage 期望构型（此时打印 WARN）
+    if (measured_leg_configs_valid_) {
+        robot_state.leg_configs = measured_leg_configs_;
+    } else {
+        std::cout << "[MPCController] WARN: MPCController using stage-expected leg configs "
+                  << "because measured leg configs are invalid" << std::endl;
+        const auto stage = crossing_state_machine_->getCurrentState();
+        for (int i = 0; i < 4; ++i) {
+            bool is_front_leg = (i == 0 || i == 3);
 
-        switch (stage) {
-            case CrossingStateMachine::CrossingState::FRONT_LEGS_TRANSIT:
-            case CrossingStateMachine::CrossingState::HYBRID_GAIT_WALKING:
-            case CrossingStateMachine::CrossingState::RAIL_ALIGNMENT:
-                robot_state.leg_configs[i] = is_front_leg
-                    ? CrossingStateMachine::LegConfiguration::KNEE
-                    : CrossingStateMachine::LegConfiguration::ELBOW;
-                break;
-            case CrossingStateMachine::CrossingState::REAR_LEGS_TRANSIT:
-            case CrossingStateMachine::CrossingState::ALL_KNEE_STATE:
-                // 前后腿都切到膝式（与 computeRearLegsTransitTarget/computeAllKneeStateTarget 保持一致）
-                robot_state.leg_configs[i] = CrossingStateMachine::LegConfiguration::KNEE;
-                break;
-            case CrossingStateMachine::CrossingState::RECOVERY:
-            case CrossingStateMachine::CrossingState::CONTINUE_FORWARD:
-            case CrossingStateMachine::CrossingState::COMPLETED:
-                robot_state.leg_configs[i] = CrossingStateMachine::LegConfiguration::ELBOW;
-                break;
-            default:
-                robot_state.leg_configs[i] = CrossingStateMachine::LegConfiguration::ELBOW;
-                break;
+            switch (stage) {
+                case CrossingStateMachine::CrossingState::FRONT_LEGS_TRANSIT:
+                case CrossingStateMachine::CrossingState::HYBRID_GAIT_WALKING:
+                case CrossingStateMachine::CrossingState::RAIL_ALIGNMENT:
+                    robot_state.leg_configs[i] = is_front_leg
+                        ? CrossingStateMachine::LegConfiguration::KNEE
+                        : CrossingStateMachine::LegConfiguration::ELBOW;
+                    break;
+                case CrossingStateMachine::CrossingState::REAR_LEGS_TRANSIT:
+                case CrossingStateMachine::CrossingState::ALL_KNEE_STATE:
+                    robot_state.leg_configs[i] = CrossingStateMachine::LegConfiguration::KNEE;
+                    break;
+                case CrossingStateMachine::CrossingState::RECOVERY:
+                case CrossingStateMachine::CrossingState::CONTINUE_FORWARD:
+                case CrossingStateMachine::CrossingState::COMPLETED:
+                    robot_state.leg_configs[i] = CrossingStateMachine::LegConfiguration::ELBOW;
+                    break;
+                default:
+                    robot_state.leg_configs[i] = CrossingStateMachine::LegConfiguration::ELBOW;
+                    break;
+            }
         }
+    }
+    for (int i = 0; i < 4; ++i) {
         robot_state.foot_contacts[i] = true;
     }
 
@@ -569,12 +661,58 @@ void MPCController::updateCrossingState(const Eigen::VectorXd& x0) {
     // 扩展为16维（添加滑动副目标位置）
     x_ref_.resize(params_.horizon);
     auto target_state = crossing_state_machine_->getTargetState();
+    const auto ref_stage = crossing_state_machine_->getCurrentState();
+    Eigen::Vector4d rail_ref = target_state.sliding_positions;
+    if (ref_stage == CrossingStateMachine::CrossingState::BODY_FORWARD_SHIFT &&
+        bfs_rail_ramp_enabled_) {
+        if (!bfs_rail_ref_initialized_ || last_crossing_stage_ != ref_stage) {
+            bfs_rail_ref_ = robot_state.sliding_positions;
+            bfs_rail_start_ = robot_state.sliding_positions;
+            bfs_rail_ref_initialized_ = true;
+        }
+
+        if (freeze_crossing_rail_targets_ || bfs_rail_gate_freeze_) {
+            // Freeze to measured rail positions when attitude/height is unstable.
+            bfs_rail_ref_ = robot_state.sliding_positions;
+        } else {
+            const double max_step =
+                bfs_rail_ramp_rate_ *
+                bfs_rail_ramp_rate_scale_ *
+                params_.dt;
+            for (int i = 0; i < 4; ++i) {
+                bfs_rail_ref_(i) = moveTowards(
+                    bfs_rail_ref_(i),
+                    target_state.sliding_positions(i),
+                    max_step);
+            }
+        }
+        rail_ref = bfs_rail_ref_;
+        static int bfs_rail_log_count = 0;
+        if (++bfs_rail_log_count % 20 == 0) {
+            std::cout << "[MPCController] BFS rail_ref gate freeze="
+                      << (bfs_rail_gate_freeze_ ? 1 : 0)
+                      << " scale=" << bfs_rail_ramp_rate_scale_
+                      << " rate=" << bfs_rail_ramp_rate_
+                      << " ref=[" << rail_ref(0) << ", " << rail_ref(1)
+                      << ", " << rail_ref(2) << ", " << rail_ref(3) << "]"
+                      << " measured=[" << robot_state.sliding_positions(0) << ", "
+                      << robot_state.sliding_positions(1) << ", "
+                      << robot_state.sliding_positions(2) << ", "
+                      << robot_state.sliding_positions(3) << "]"
+                      << std::endl;
+        }
+    } else {
+        bfs_rail_ref_initialized_ = false;
+        if (freeze_crossing_rail_targets_) {
+            rail_ref = robot_state.sliding_positions;
+        }
+    }
+    last_crossing_stage_ = ref_stage;
+
     for (int k = 0; k < params_.horizon; ++k) {
         x_ref_[k] = Eigen::VectorXd::Zero(16);
         x_ref_[k].segment<12>(0) = crossing_ref_12d[k];  // SRBD状态
-        x_ref_[k].segment<4>(12) = freeze_crossing_rail_targets_
-            ? robot_state.sliding_positions
-            : target_state.sliding_positions;
+        x_ref_[k].segment<4>(12) = rail_ref;
     }
 }
 
@@ -656,15 +794,34 @@ void MPCController::addSlidingConstraints(std::vector<Eigen::Triplet<double>>& A
         return;
     }
     
+    const bool rail_targets_frozen =
+        freeze_crossing_rail_targets_ ||
+        (bfs_rail_ramp_enabled_ && bfs_rail_gate_freeze_);
+
     // 获取滑动副限位（如果越障开启则使用 CrossingStateMachine 的 stage-specific constraints）
     Eigen::Vector4d d_min, d_max;
     Eigen::Vector4d v_slide_max_vec;
     if (crossing_enabled_ && crossing_state_machine_ &&
-        !freeze_crossing_rail_targets_) {
+        !rail_targets_frozen) {
         const auto stage_constraints = crossing_state_machine_->getCurrentConstraints();
         d_min = stage_constraints.sliding_min;
         d_max = stage_constraints.sliding_max;
         v_slide_max_vec = stage_constraints.sliding_vel_max;
+        if (crossing_state_machine_->getCurrentState() ==
+                CrossingStateMachine::CrossingState::BODY_FORWARD_SHIFT &&
+            bfs_rail_ramp_enabled_ &&
+            bfs_rail_ref_initialized_) {
+            const Eigen::Vector4d physical_min(
+                (Eigen::Vector4d() << 0.0, -0.111, 0.0, -0.111).finished());
+            const Eigen::Vector4d physical_max(
+                (Eigen::Vector4d() << 0.111, 0.0, 0.111, 0.0).finished());
+            const double corridor = std::max(0.012, bfs_rail_ramp_rate_ * params_.dt * 8.0);
+            for (int i = 0; i < 4; ++i) {
+                d_min(i) = std::max(physical_min(i), bfs_rail_ref_(i) - corridor);
+                d_max(i) = std::min(physical_max(i), bfs_rail_ref_(i) + corridor);
+            }
+            v_slide_max_vec.setConstant(std::max(0.020, bfs_rail_ramp_rate_ * 2.0));
+        }
     } else {
         // Canonical rail semantics from dog2.urdf.xacro:
         // lf/rh in [0.0, 0.111], lh/rf in [-0.111, 0.0].
@@ -689,7 +846,7 @@ void MPCController::addSlidingConstraints(std::vector<Eigen::Triplet<double>>& A
     //     d_i - s_i <= d_max
     //   - 非 crossing：直接硬约束
     const bool use_soft_rail_bounds =
-        crossing_enabled_ && crossing_state_machine_ && !freeze_crossing_rail_targets_;
+        crossing_enabled_ && crossing_state_machine_ && !rail_targets_frozen;
     const int nv_base = N * (nx + nu);
     const int slack_lower_base = nv_base;       // s_lower 放在末尾
     const int slack_upper_base = nv_base + N * 4;  // s_upper 在 s_lower 后面
@@ -773,7 +930,7 @@ void MPCController::addSlidingConstraints(std::vector<Eigen::Triplet<double>>& A
     // stages, but they are too restrictive for the current stage-3 simplified
     // walking pipeline, where rail joints should stay close to the measured
     // locked stance rather than dominate feasibility.
-    if (crossing_enabled_ && !freeze_crossing_rail_targets_) {
+    if (crossing_enabled_ && !rail_targets_frozen) {
         // 3. 对称约束：-epsilon <= d1 - d3 <= epsilon, -epsilon <= d2 - d4 <= epsilon
         for (int k = 0; k < N; ++k) {
             // d1 - d3
@@ -820,7 +977,8 @@ void MPCController::addRailWindowConstraints(std::vector<Eigen::Triplet<double>>
                                             std::vector<double>& l_vec,
                                             std::vector<double>& u_vec) {
     if (!crossing_enabled_ || !crossing_state_machine_ ||
-        freeze_crossing_rail_targets_) {
+        freeze_crossing_rail_targets_ ||
+        (bfs_rail_ramp_enabled_ && bfs_rail_gate_freeze_)) {
         return;
     }
 

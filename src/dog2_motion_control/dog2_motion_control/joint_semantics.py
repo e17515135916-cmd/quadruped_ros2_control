@@ -43,8 +43,8 @@ JOINT_AXIS_LOCAL = {
 RAIL_LIMITS_BY_LEG = {
     "lf": (0.0, 0.111),
     "lh": (-0.111, 0.0),
-    "rh": (0.0, 0.111),
-    "rf": (-0.111, 0.0),
+    "rh": (-0.111, 0.0),
+    "rf": (0.0, 0.111),
 }
 
 # URDF prismatic joint-frame axis (matches dog2.urdf.xacro rail_axis macro arg).

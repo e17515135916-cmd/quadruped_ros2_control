@@ -18,6 +18,7 @@ from dog2_motion_control.gait_generator import GaitGenerator, GaitConfig
 from dog2_motion_control.kinematics_solver import create_kinematics_solver
 from dog2_motion_control.trajectory_planner import TrajectoryPlanner
 from dog2_motion_control.joint_controller import JointController
+from dog2_motion_control.joint_names import RAIL_JOINTS, get_joint_name
 
 
 class TestSystemIntegration:
@@ -91,8 +92,7 @@ class TestSystemIntegration:
         assert len(sent_commands) == 16
         
         # 验证导轨关节恒定为0.0
-        rail_joints = ['j1', 'j2', 'j3', 'j4']
-        for rail_joint in rail_joints:
+        for rail_joint in RAIL_JOINTS:
             assert rail_joint in sent_commands
             assert sent_commands[rail_joint] == 0.0
         
@@ -109,6 +109,10 @@ class TestSystemIntegration:
         original_ik_solver = controller.ik_solver
         controller.ik_solver = Mock()
         controller.ik_solver.solve_ik = Mock(return_value=None)
+        controller.ik_solver.leg_params = {
+            leg_id: Mock(joint_limits={"rail": (-0.111, 0.111)})
+            for leg_id in ("lf", "rf", "lh", "rh")
+        }
         
         # 设置上一个有效配置
         controller.last_valid_joint_positions['lf'] = (0.0, 0.1, 0.2, 0.3)
@@ -121,6 +125,7 @@ class TestSystemIntegration:
         controller.gait_generator = Mock()
         controller.gait_generator.update = Mock()
         controller.gait_generator.get_foot_target = Mock(return_value=(0.3, 0.2, -0.2))
+        controller.gait_generator.get_phase_progress_scalar = Mock(return_value=0.0)
         
         controller.is_stopping = False
         
@@ -185,9 +190,14 @@ class TestSystemIntegration:
         controller.gait_generator = Mock()
         controller.gait_generator.update = Mock()
         controller.gait_generator.get_foot_target = Mock(return_value=(0.3, 0.2, -0.2))
+        controller.gait_generator.get_phase_progress_scalar = Mock(return_value=0.0)
         
         controller.ik_solver = Mock()
         controller.ik_solver.solve_ik = Mock(return_value=(0.0, 0.1, 0.2, 0.3))
+        controller.ik_solver.leg_params = {
+            leg_id: Mock(joint_limits={"rail": (-0.111, 0.111)})
+            for leg_id in ("lf", "rf", "lh", "rh")
+        }
         
         controller.is_stopping = False
         
@@ -341,16 +351,15 @@ class TestSystemIntegration:
         assert len(sent_commands) == 16
         
         # 验证导轨关节
-        rail_joints = ['j1', 'j2', 'j3', 'j4']
-        for rail_joint in rail_joints:
+        for rail_joint in RAIL_JOINTS:
             assert rail_joint in sent_commands
             assert sent_commands[rail_joint] == 0.0
         
         # 验证旋转关节存在
         revolute_joints = []
-        for leg_prefix in ['lf', 'rf', 'lh', 'rh']:
-            for joint_type in ['haa', 'hfe', 'kfe']:
-                revolute_joints.append(f'{leg_prefix}_{joint_type}_joint')
+        for leg_num in (1, 2, 3, 4):
+            for role in ('hip_roll', 'hip_pitch', 'knee_pitch'):
+                revolute_joints.append(get_joint_name(leg_num, role))
         
         for revolute_joint in revolute_joints:
             assert revolute_joint in sent_commands

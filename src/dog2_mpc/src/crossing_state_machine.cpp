@@ -172,39 +172,171 @@ bool CrossingStateMachine::canTransitionToNext(const RobotState& current_state) 
     }
 
     if (!progress_ok) {
+        logTransitionHoldReason(
+            current_state,
+            progress_ok,
+            computeStageStabilityMetrics(current_state));
         return false;
     }
 
     // 额外 guard：rail tracking + support polygon，避免阶段几何时序错配
+    const StageStabilityMetrics metrics = computeStageStabilityMetrics(current_state);
+    const bool stable_for_transit =
+        current_state_ == CrossingState::APPROACH ? true : isStableForTransit(metrics);
+    const bool ok = metrics.rail_tracking_ok && stable_for_transit;
+    if (!ok) {
+        logTransitionHoldReason(current_state, progress_ok, metrics);
+    }
+    return ok;
+}
+
+CrossingStateMachine::StageStabilityMetrics
+CrossingStateMachine::computeStageStabilityMetrics(const RobotState& current_state) const {
+    StageStabilityMetrics metrics;
+    metrics.level_attitude_valid = current_state.level_attitude_valid;
+    metrics.roll_abs = current_state.level_attitude_valid
+        ? std::abs(current_state.level_roll)
+        : std::abs(current_state.orientation.x());
+    metrics.pitch_abs = current_state.level_attitude_valid
+        ? std::abs(current_state.level_pitch)
+        : std::abs(current_state.orientation.y());
+    metrics.level_tilt = current_state.level_tilt;
+    metrics.body_up_z = current_state.body_up_z;
+    metrics.yaw_rate_abs = std::abs(current_state.angular_velocity.z());
+    metrics.body_z = current_state.position.z();
+    metrics.attitude_ok =
+        current_state.level_attitude_valid &&
+        metrics.roll_abs < max_roll_for_transit_ &&
+        metrics.pitch_abs < max_pitch_for_transit_ &&
+        metrics.level_tilt < max_level_tilt_for_transit_ &&
+        metrics.body_up_z > min_body_up_z_for_transit_;
+
     const double rail_tracking_error = computeRailTrackingError(current_state);
-    const bool railStable =
+    metrics.rail_tracking_error = rail_tracking_error;
+    metrics.rail_tracking_ok =
         current_state_ == CrossingState::APPROACH ||
         rail_tracking_error < rail_tracking_error_threshold_;
 
-    int contact_count = 0;
-    for (int i = 0; i < 4; ++i) {
-        if (current_state.foot_contacts[i]) {
-            contact_count++;
+    for (bool in_contact : current_state.foot_contacts) {
+        if (in_contact) {
+            metrics.contact_count++;
+        }
+    }
+    metrics.contacts_ok = metrics.contact_count >= 2;
+    metrics.support_margin = computeSupportPolygonMargin(current_state);
+
+    if (metrics.contact_count == 2) {
+        metrics.support_ok = metrics.support_margin < 0.025;
+    } else if (metrics.contact_count >= 3) {
+        metrics.support_ok = metrics.support_margin > support_polygon_margin_threshold_;
+    } else {
+        metrics.support_ok = false;
+    }
+
+    return metrics;
+}
+
+bool CrossingStateMachine::isStableForTransit(const StageStabilityMetrics& metrics) const {
+    return metrics.contacts_ok &&
+           metrics.rail_tracking_ok &&
+           metrics.support_ok &&
+           metrics.attitude_ok &&
+           metrics.yaw_rate_abs < max_yaw_rate_for_transit_ &&
+           metrics.body_z >= min_body_z_for_transit_ &&
+           metrics.body_z <= max_body_z_for_transit_;
+}
+
+std::string CrossingStateMachine::getTransitionBlockReason(
+    const RobotState& state,
+    bool progress_ok,
+    const StageStabilityMetrics& metrics) const {
+    (void)state;
+    if (!progress_ok) {
+        switch (current_state_) {
+            case CrossingState::APPROACH:
+                return "approach_progress_not_ready";
+            case CrossingState::BODY_FORWARD_SHIFT:
+                return "rail_compact_body_not_ready";
+            case CrossingState::FRONT_LEGS_TRANSIT:
+                return "front_legs_not_through";
+            case CrossingState::HYBRID_GAIT_WALKING:
+                return "rear_rail_not_through";
+            case CrossingState::RAIL_ALIGNMENT:
+                return "rail_alignment_not_ready";
+            case CrossingState::REAR_LEGS_TRANSIT:
+                return "rear_legs_not_through";
+            case CrossingState::ALL_KNEE_STATE:
+                return "all_knee_not_ready";
+            case CrossingState::RECOVERY:
+                return "recovery_not_ready";
+            default:
+                return "progress_not_ready";
         }
     }
 
-    const double support_margin = computeSupportPolygonMargin(current_state);
-    bool supportStable = false;
-
-    // 支撑域退化（对角线 Trot：仅2足接触）时，使用 Capture Point (CP) 动态稳定裕度
-    // 以 CP 到两足连线线段的垂直距离 d_cp 判断是否允许 transition。
-    if (contact_count == 2) {
-        const double d_cp = support_margin;  // computeSupportPolygonMargin 在此退化分支返回 d_cp
-        supportStable = (d_cp < 0.025);
-    } else if (contact_count >= 3) {
-        // 多足支撑：使用几何支撑域裕度 margin
-        supportStable = (support_margin > support_polygon_margin_threshold_);
-    } else {
-        // 不足两点接触时无法稳定支撑
-        supportStable = false;
+    if (!metrics.contacts_ok) {
+        return "insufficient_contacts";
     }
+    if (!metrics.rail_tracking_ok) {
+        return "rail_tracking_unstable";
+    }
+    if (!metrics.support_ok) {
+        return "support_margin_unstable";
+    }
+    if (!metrics.level_attitude_valid) {
+        return "level_attitude_unavailable";
+    }
+    if (metrics.roll_abs >= max_roll_for_transit_) {
+        return "level_roll_unstable";
+    }
+    if (metrics.pitch_abs >= max_pitch_for_transit_) {
+        return "level_pitch_unstable";
+    }
+    if (metrics.level_tilt >= max_level_tilt_for_transit_) {
+        return "level_tilt_unstable";
+    }
+    if (metrics.body_up_z <= min_body_up_z_for_transit_) {
+        return "body_up_z_unstable";
+    }
+    if (metrics.yaw_rate_abs >= max_yaw_rate_for_transit_) {
+        return "yaw_rate_unstable";
+    }
+    if (metrics.body_z < min_body_z_for_transit_) {
+        return "body_z_too_low";
+    }
+    if (metrics.body_z > max_body_z_for_transit_) {
+        return "body_z_too_high";
+    }
+    return "unknown_hold";
+}
 
-    return railStable && supportStable;
+void CrossingStateMachine::logTransitionHoldReason(
+    const RobotState& state,
+    bool progress_ok,
+    const StageStabilityMetrics& metrics) const {
+    const std::string reason = getTransitionBlockReason(state, progress_ok, metrics);
+    if (reason == last_transition_block_reason_ &&
+        (total_time_ - last_transition_block_log_time_) < 0.5) {
+        return;
+    }
+    last_transition_block_reason_ = reason;
+    last_transition_block_log_time_ = total_time_;
+    std::cout << "[stage_gate] hold " << getStateName(current_state_)
+              << ": reason=" << reason
+              << " level_valid=" << metrics.level_attitude_valid
+              << " level_roll=" << metrics.roll_abs << " limit=" << max_roll_for_transit_
+              << " level_pitch=" << metrics.pitch_abs << " limit=" << max_pitch_for_transit_
+              << " level_tilt=" << metrics.level_tilt << " limit=" << max_level_tilt_for_transit_
+              << " body_up_z=" << metrics.body_up_z << " min=" << min_body_up_z_for_transit_
+              << " yaw_rate=" << metrics.yaw_rate_abs << " limit=" << max_yaw_rate_for_transit_
+              << " body_z=" << metrics.body_z << " range=[" << min_body_z_for_transit_
+              << "," << max_body_z_for_transit_ << "]"
+              << " support_margin=" << metrics.support_margin
+              << " rail_err=" << metrics.rail_tracking_error
+              << " contacts=" << metrics.contact_count
+              << " stable_time=" << transition_stable_elapsed_
+              << " required=" << transition_stable_time_
+              << std::endl;
 }
 
 double CrossingStateMachine::computeRailTrackingError(const RobotState& state) const {
@@ -407,10 +539,24 @@ bool CrossingStateMachine::checkApproachComplete(const RobotState& state) const 
 
 bool CrossingStateMachine::checkBodyForwardShiftComplete(const RobotState& state) const {
     // 机身前探完成条件：四个 rail 到达真实限位内的 compact-body 姿态。
-    bool diagonal_positive_extended = (state.sliding_positions[0] >= 0.10) &&
-                                      (state.sliding_positions[2] >= 0.10);
-    bool diagonal_negative_extended = (state.sliding_positions[1] <= -0.10) &&
-                                      (state.sliding_positions[3] <= -0.10);
+    constexpr double rail_done = 0.095;
+    bool diagonal_positive_extended = (state.sliding_positions[0] >= rail_done) &&
+                                      (state.sliding_positions[2] >= rail_done);
+    bool diagonal_negative_extended = (state.sliding_positions[1] <= -rail_done) &&
+                                      (state.sliding_positions[3] <= -rail_done);
+
+    static int log_count = 0;
+    if (++log_count % 20 == 0 ||
+        !(diagonal_positive_extended && diagonal_negative_extended)) {
+        std::cout << "[BFS guard] q=["
+                  << state.sliding_positions[0] << ", "
+                  << state.sliding_positions[1] << ", "
+                  << state.sliding_positions[2] << ", "
+                  << state.sliding_positions[3] << "] rail_done=" << rail_done
+                  << " pos_ok=" << diagonal_positive_extended
+                  << " neg_ok=" << diagonal_negative_extended
+                  << std::endl;
+    }
     
     return diagonal_positive_extended && diagonal_negative_extended;
 }

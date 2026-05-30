@@ -523,16 +523,10 @@ class SpiderRobotController(Node):
             cruise_rail_locked = self.mode == LocomotionMode.CRUISE_3DOF and float(
                 self.current_rail_alpha
             ) <= self.rail_lock_alpha_epsilon
-            # CRUISE 锁轨：用当前测量的 prismatic 作为固定 rail 解 3R，并下发同一 rail。
-            # 若强行 rail_hint=0 而仿真在重力下停在非零位，会出现数十毫米“假滑移”急停。
             if cruise_rail_locked:
                 jn_pre = get_leg_joint_names(PREFIX_TO_LEG_MAP[leg_id])
                 rail_joint = jn_pre["rail"]
-                st = self.joint_controller.current_joint_states.get(rail_joint)
-                if st is not None:
-                    rail_hint = float(max(rail_min, min(rail_max, st["position"])))
-                else:
-                    rail_hint = float(self.rail_locked_position_m)
+                rail_hint = self._get_locked_rail_target(rail_joint, rail_min, rail_max)
             else:
                 rail_hint = rail_mid + (phase_scalar * rail_half_span) * self.current_rail_alpha
 
@@ -623,6 +617,25 @@ class SpiderRobotController(Node):
 
         return limited_target
 
+    def _get_locked_rail_target(self, rail_joint: str, rail_min: float, rail_max: float) -> float:
+        """Return the fixed rail target used during CRUISE_3DOF walking.
+
+        The target is normally synced once from joint_states after standup.
+        Falling back to measured position is only for early startup before a
+        sync target exists; otherwise locked walking must not chase slow rail
+        drift by updating the target to every fresh measurement.
+        """
+        target = self.joint_controller.last_rail_targets.get(rail_joint)
+        if target is None:
+            target = self.joint_controller.commanded_rail_targets.get(rail_joint)
+        if target is None:
+            st = self.joint_controller.current_joint_states.get(rail_joint)
+            if st is not None:
+                target = st.get("position")
+        if target is None:
+            target = self.rail_locked_position_m
+        return float(max(rail_min, min(rail_max, float(target))))
+
     def _handle_smooth_stop(self):
         elapsed = self.gait_generator.current_time - self.stop_start_time
         stop_dur = self.gait_generator.config.cycle_time
@@ -683,12 +696,16 @@ class SpiderRobotController(Node):
     def _check_and_apply_config_update(self):
         if self.pending_config_update is None or self.is_stopping:
             return
-        phase = self.gait_generator.get_phase("lf")
+        phase = self._get_gait_cycle_phase()
         if self.last_cycle_phase > 0.9 and phase < 0.1:
             self.gait_generator.config = self.pending_config_update
             self.pending_config_update = None
             self.get_logger().info("Config update applied at cycle boundary.")
         self.last_cycle_phase = phase
+
+    def _get_gait_cycle_phase(self) -> float:
+        cycle_time = max(float(self.gait_generator.config.cycle_time), 1e-6)
+        return float((self.gait_generator.current_time / cycle_time) % 1.0)
 
     def enable_debug_mode(self, enable=True):
         self.debug_mode = enable

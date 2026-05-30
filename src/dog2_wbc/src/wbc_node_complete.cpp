@@ -37,6 +37,12 @@ private:
         this->declare_parameter("l2", 0.2);
         this->declare_parameter("max_torque", 50.0);
         this->declare_parameter("max_sliding_force", 100.0);
+        this->declare_parameter("rail_hold_enabled", false);
+        this->declare_parameter("rail_hold_hover_enabled", false);
+        this->declare_parameter("rail_hold_crossing_staging_enabled", false);
+        this->declare_parameter("rail_hold_kp", 450.0);
+        this->declare_parameter("rail_hold_kd", 25.0);
+        this->declare_parameter("rail_hold_max_force", 70.0);
         
         // 获取参数
         WBCController::Parameters params;
@@ -44,6 +50,12 @@ private:
         params.l2 = this->get_parameter("l2").as_double();
         params.max_torque = this->get_parameter("max_torque").as_double();
         params.max_sliding_force = this->get_parameter("max_sliding_force").as_double();
+        rail_hold_enabled_ = this->get_parameter("rail_hold_enabled").as_bool();
+        rail_hold_hover_enabled_ = this->get_parameter("rail_hold_hover_enabled").as_bool();
+        rail_hold_crossing_staging_enabled_ = this->get_parameter("rail_hold_crossing_staging_enabled").as_bool();
+        rail_hold_kp_ = this->get_parameter("rail_hold_kp").as_double();
+        rail_hold_kd_ = this->get_parameter("rail_hold_kd").as_double();
+        rail_hold_max_force_ = this->get_parameter("rail_hold_max_force").as_double();
         
         wbc_params_ = params;
     }
@@ -108,6 +120,7 @@ private:
         // 计算关节力矩（使用精确雅可比）
         Eigen::VectorXd torques = wbc_controller_->computeTorques(
             foot_forces, leg_states_);
+        applyRailHold(torques);
         
         // 发布旋转关节力矩
         auto torque_msg = std_msgs::msg::Float64MultiArray();
@@ -249,6 +262,63 @@ private:
 
         set_all(WBCController::LegConfiguration::ELBOW);
     }
+
+    bool shouldHoldRails() const {
+        if (!rail_hold_enabled_) {
+            return false;
+        }
+        if (rail_hold_hover_enabled_ && last_crossing_state_ == "HOVER") {
+            return true;
+        }
+        if (rail_hold_crossing_staging_enabled_ &&
+            (last_crossing_state_ == "CROSSING:PRE_APPROACH" ||
+             last_crossing_state_ == "CROSSING:APPROACH")) {
+            return true;
+        }
+        return false;
+    }
+
+    void applyRailHold(Eigen::VectorXd& torques) {
+        if (torques.size() < 16 || !shouldHoldRails()) {
+            return;
+        }
+
+        Eigen::Vector4d hold_effort = Eigen::Vector4d::Zero();
+        Eigen::Vector4d raw_efforts = Eigen::Vector4d::Zero();
+        for (int leg = 0; leg < 4; ++leg) {
+            const double position = leg_states_[leg].sliding_position;
+            const double velocity = sliding_velocities_(leg);
+            const double raw_effort =
+                rail_hold_kp_ * (rail_hold_targets_(leg) - position) -
+                rail_hold_kd_ * velocity;
+            raw_efforts(leg) = raw_effort;
+            const double effort =
+                std::max(-rail_hold_max_force_,
+                         std::min(rail_hold_max_force_, raw_effort));
+            hold_effort(leg) = effort;
+            torques(12 + leg) += effort;
+        }
+
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                    "WBC rail_hold: state=%s target=[%.3f,%.3f,%.3f,%.3f] pos=[%.3f,%.3f,%.3f,%.3f] raw=[%.1f,%.1f,%.1f,%.1f] effort=[%.1f,%.1f,%.1f,%.1f]",
+                    last_crossing_state_.c_str(),
+                    rail_hold_targets_(0),
+                    rail_hold_targets_(1),
+                    rail_hold_targets_(2),
+                    rail_hold_targets_(3),
+                    leg_states_[0].sliding_position,
+                    leg_states_[1].sliding_position,
+                    leg_states_[2].sliding_position,
+                    leg_states_[3].sliding_position,
+                    raw_efforts(0),
+                    raw_efforts(1),
+                    raw_efforts(2),
+                    raw_efforts(3),
+                    hold_effort(0),
+                    hold_effort(1),
+                    hold_effort(2),
+                    hold_effort(3));
+    }
     
     int getLegIdFromName(const std::string& name) {
         if (name.find("lf_") != std::string::npos ||
@@ -324,6 +394,11 @@ private:
                    << " fz_cap=" << fz_capacity
                    << " fz_margin=" << fz_margin
                    << " p=" << mech_power << "]";
+            if (femur_util >= 0.99 || tibia_util >= 0.99 || rail_util >= 0.99) {
+                RCLCPP_WARN(this->get_logger(),
+                            "SATURATION WARNING! Leg %s: femur_util=%.2f, tibia_util=%.2f, rail_util=%.2f",
+                            kLegNames[leg], femur_util, tibia_util, rail_util);
+            }
         }
         RCLCPP_INFO(this->get_logger(), "%s", stream.str().c_str());
     }
@@ -333,6 +408,13 @@ private:
     std::array<WBCController::LegState, 4> leg_states_;
     std::array<Eigen::Vector3d, 4> joint_velocities_;
     Eigen::Vector4d sliding_velocities_ = Eigen::Vector4d::Zero();
+    Eigen::Vector4d rail_hold_targets_ = Eigen::Vector4d::Zero();
+    bool rail_hold_enabled_ = false;
+    bool rail_hold_hover_enabled_ = false;
+    bool rail_hold_crossing_staging_enabled_ = false;
+    double rail_hold_kp_ = 450.0;
+    double rail_hold_kd_ = 25.0;
+    double rail_hold_max_force_ = 70.0;
     
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr foot_force_sub_;
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_sub_;

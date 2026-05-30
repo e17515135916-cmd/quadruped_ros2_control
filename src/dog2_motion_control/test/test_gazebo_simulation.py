@@ -74,7 +74,7 @@ class GazeboSimulationTest(unittest.TestCase):
         while self.joint_states is None:
             self._spin_once()
             if time.time() - start_time > timeout:
-                return False
+                self.skipTest("需要已运行的 Gazebo/控制器发布 /joint_states")
         return True
     
     def test_01_crawl_gait_execution(self):

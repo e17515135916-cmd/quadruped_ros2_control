@@ -62,7 +62,7 @@ class TestRailLimits:
         """测试前右腿导轨在限位内"""
         leg_id = 'rf'
         q_demo = (0.0, 0.3, -0.5)
-        valid_offsets = [0.0, -0.05, -0.111]
+        valid_offsets = [0.0, 0.05, 0.111]
         for rail_offset in valid_offsets:
             foot = solver.solve_fk(leg_id, (rail_offset, *q_demo))
             joint_angles = solver.solve_ik(leg_id, foot, rail_offset=rail_offset)
@@ -75,36 +75,36 @@ class TestRailLimits:
         leg_id = 'rf'
         target_pos = (1.4, -0.9, 0.0)
         
-        # 前右腿导轨下限: -0.111
+        # 前右腿导轨下限: 0.0
         # 测试超出下限的值
-        invalid_offsets = [-0.112, -0.15, -0.2]
+        invalid_offsets = [-0.001, -0.05, -0.2]
         
         for rail_offset in invalid_offsets:
             joint_angles = solver.solve_ik(leg_id, target_pos, rail_offset=rail_offset)
             assert joint_angles is None, \
-                f"导轨位移{rail_offset}超出下限-0.111，应该返回None"
+                f"导轨位移{rail_offset}超出下限0.0，应该返回None"
     
     def test_rail_exceeds_upper_limit_rf(self, solver):
         """测试前右腿导轨超出上限"""
         leg_id = 'rf'
         target_pos = (1.4, -0.9, 0.0)
         
-        # 前右腿导轨上限: 0.0
+        # 前右腿导轨上限: 0.111
         # 测试超出上限的值
-        invalid_offsets = [0.001, 0.05, 0.2]
+        invalid_offsets = [0.112, 0.15, 0.2]
         
         for rail_offset in invalid_offsets:
             joint_angles = solver.solve_ik(leg_id, target_pos, rail_offset=rail_offset)
             assert joint_angles is None, \
-                f"导轨位移{rail_offset}超出上限0.0，应该返回None"
+                f"导轨位移{rail_offset}超出上限0.111，应该返回None"
     
     def test_rail_limits_all_legs(self, solver):
         """测试所有腿的导轨限位"""
         test_cases = {
             'lf': {'limits': (0.0, 0.111), 'valid': [0.0, 0.05], 'invalid': [-0.01, 0.12]},
-            'rf': {'limits': (-0.111, 0.0), 'valid': [0.0, -0.05], 'invalid': [0.01, -0.12]},
+            'rf': {'limits': (0.0, 0.111), 'valid': [0.0, 0.05], 'invalid': [-0.01, 0.12]},
             'lh': {'limits': (-0.111, 0.0), 'valid': [0.0, -0.05], 'invalid': [0.01, -0.12]},
-            'rh': {'limits': (0.0, 0.111), 'valid': [0.0, 0.05], 'invalid': [-0.01, 0.12]},
+            'rh': {'limits': (-0.111, 0.0), 'valid': [0.0, -0.05], 'invalid': [0.01, -0.12]},
         }
         
         for leg_id, test_data in test_cases.items():
@@ -130,10 +130,10 @@ class TestRailLimits:
             ('lf', 0.111, True),    # 前左腿上限（边界内）
             ('lf', -0.0000001, False),  # 前左腿下限外
             ('lf', 0.1110001, False),   # 前左腿上限外
-            ('rf', -0.111, True),   # 前右腿下限（边界内）
-            ('rf', 0.0, True),      # 前右腿上限（边界内）
-            ('rf', -0.1110001, False),  # 前右腿下限外
-            ('rf', 0.0000001, False),   # 前右腿上限外
+            ('rf', 0.0, True),      # 前右腿下限（边界内）
+            ('rf', 0.111, True),    # 前右腿上限（边界内）
+            ('rf', -0.0000001, False),  # 前右腿下限外
+            ('rf', 0.1110001, False),   # 前右腿上限外
         ]
         
         for leg_id, rail_offset, should_pass_limit_check in test_cases:

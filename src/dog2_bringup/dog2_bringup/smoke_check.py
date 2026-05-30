@@ -101,6 +101,8 @@ class SmokeCheckNode(Node):
         self.declare_parameter("joint_effort_topic", "/dog2/wbc/joint_effort_command")
         self.declare_parameter("rail_effort_topic", "/dog2/wbc/rail_effort_command")
         self.declare_parameter("effort_command_topic", "/effort_controller/commands")
+        self.declare_parameter("smoke_mode", "force_smoke")
+        self.declare_parameter("flat_gait_demo", False)
         self.declare_parameter("stand_duration_sec", 3.0)
         self.declare_parameter("forward_duration_sec", 4.0)
         self.declare_parameter("turn_duration_sec", 4.0)
@@ -113,6 +115,16 @@ class SmokeCheckNode(Node):
         self.declare_parameter("body_height_max_m", 0.20)
         self.declare_parameter("forward_min_distance_m", 0.10)
         self.declare_parameter("turn_min_yaw_delta_rad", 0.25)
+        self.declare_parameter("flat_min_body_z", 0.08)
+        self.declare_parameter("flat_max_body_z", 0.30)
+        self.declare_parameter("flat_max_abs_roll", 0.45)
+        self.declare_parameter("flat_max_abs_pitch", 0.45)
+        self.declare_parameter("flat_max_abs_yaw_rate", 1.20)
+        self.declare_parameter("flat_max_rail_delta", 0.015)
+        self.declare_parameter("flat_forward_distance_m", 0.25)
+        self.declare_parameter("flat_swing_clearance_min_m", 0.015)
+        self.declare_parameter("flat_stance_slip_max_mps", 0.06)
+        self.declare_parameter("flat_valid_duration_sec", 3.0)
         self.declare_parameter("result_file", "")
 
         self._required_topics = self._as_string_set("required_topics")
@@ -123,6 +135,8 @@ class SmokeCheckNode(Node):
         self._required_research_controllers = self._as_string_set("required_research_controllers")
         self._expect_research_stack = bool(self.get_parameter("expect_research_stack").value)
         self._exercise_motion = bool(self.get_parameter("exercise_motion").value)
+        self._smoke_mode = str(self.get_parameter("smoke_mode").value)
+        self._flat_gait_demo = bool(self.get_parameter("flat_gait_demo").value)
         self._timeout_sec = float(self.get_parameter("timeout_sec").value)
         self._freshness_timeout_sec = float(self.get_parameter("freshness_timeout_sec").value)
         self._poll_period_sec = max(0.05, float(self.get_parameter("poll_period_sec").value))
@@ -138,6 +152,16 @@ class SmokeCheckNode(Node):
         self._body_height_max_m = float(self.get_parameter("body_height_max_m").value)
         self._forward_min_distance_m = float(self.get_parameter("forward_min_distance_m").value)
         self._turn_min_yaw_delta_rad = float(self.get_parameter("turn_min_yaw_delta_rad").value)
+        self._flat_min_body_z = float(self.get_parameter("flat_min_body_z").value)
+        self._flat_max_body_z = float(self.get_parameter("flat_max_body_z").value)
+        self._flat_roll_limit = float(self.get_parameter("flat_max_abs_roll").value)
+        self._flat_pitch_limit = float(self.get_parameter("flat_max_abs_pitch").value)
+        self._flat_yaw_rate_limit = float(self.get_parameter("flat_max_abs_yaw_rate").value)
+        self._flat_rail_delta_limit = float(self.get_parameter("flat_max_rail_delta").value)
+        self._flat_forward_distance_m = float(self.get_parameter("flat_forward_distance_m").value)
+        self._flat_swing_clearance_min_m = float(self.get_parameter("flat_swing_clearance_min_m").value)
+        self._flat_stance_slip_max_mps = float(self.get_parameter("flat_stance_slip_max_mps").value)
+        self._flat_valid_duration_sec = float(self.get_parameter("flat_valid_duration_sec").value)
         self._result_file = str(self.get_parameter("result_file").value)
         self._cmd_vel_topic = str(self.get_parameter("cmd_vel_topic").value)
         self._odom_topic = str(self.get_parameter("odom_topic").value)
@@ -158,6 +182,17 @@ class SmokeCheckNode(Node):
         self._stage_peak_projected_distance = 0.0
         self._stage_peak_planar_distance = 0.0
         self._stage_peak_yaw_delta = 0.0
+        self._flat_gate_started_at: Optional[float] = None
+        self._flat_gate_body_z_min = float("inf")
+        self._flat_gate_body_z_max = 0.0
+        self._flat_gate_max_abs_roll = 0.0
+        self._flat_gate_max_abs_pitch = 0.0
+        self._flat_gate_max_abs_yaw_rate = 0.0
+        self._flat_gate_max_rail_delta = 0.0
+        self._flat_gate_forward_distance = 0.0
+        self._flat_gate_swing_clearance_min = float("inf")
+        self._flat_gate_stance_slip_max = 0.0
+        self._flat_gate_stage_seen = False
 
         self._last_controller_names: Set[str] = set()
         self._pending_future = None
@@ -495,6 +530,72 @@ class SmokeCheckNode(Node):
             % (missing_topics, missing_nodes, missing_controllers, missing_streams)
         )
 
+    def _flat_quality_passed(self) -> bool:
+        if not self._flat_gate_stage_seen:
+            return False
+        return (
+            self._flat_gate_body_z_min >= self._flat_min_body_z
+            and self._flat_gate_body_z_max <= self._flat_max_body_z
+            and self._flat_gate_max_abs_roll <= self._flat_max_abs_roll
+            and self._flat_gate_max_abs_pitch <= self._flat_max_abs_pitch
+            and self._flat_gate_max_abs_yaw_rate <= self._flat_max_abs_yaw_rate
+            and self._flat_gate_max_rail_delta <= self._flat_max_rail_delta
+            and self._flat_gate_forward_distance >= self._flat_forward_distance_m
+            and self._flat_gate_swing_clearance_min >= self._flat_swing_clearance_min_m
+            and self._flat_gate_stance_slip_max <= self._flat_stance_slip_max_mps
+            and self._flat_gate_started_at is not None
+            and (self._now_sec() - self._flat_gate_started_at) >= self._flat_valid_duration_sec
+        )
+
+    def _flat_quality_reason(self) -> str:
+        if not self._flat_gate_stage_seen:
+            return "only_standup_no_walk"
+        if self._flat_gate_body_z_min < self._flat_min_body_z:
+            return "body_too_low"
+        if self._flat_gate_body_z_max > self._flat_max_body_z:
+            return "body_too_high"
+        if self._flat_gate_max_abs_roll > self._flat_max_abs_roll:
+            return "roll_unstable"
+        if self._flat_gate_max_abs_pitch > self._flat_max_abs_pitch:
+            return "pitch_unstable"
+        if self._flat_gate_max_abs_yaw_rate > self._flat_max_abs_yaw_rate:
+            return "yaw_rate_unstable"
+        if self._flat_gate_max_rail_delta > self._flat_max_rail_delta:
+            return "rail_moved_on_flat"
+        if self._flat_gate_forward_distance < self._flat_forward_distance_m:
+            return "no_forward_progress"
+        if self._flat_gate_swing_clearance_min < self._flat_swing_clearance_min_m:
+            return "no_swing_clearance"
+        if self._flat_gate_stance_slip_max > self._flat_stance_slip_max_mps:
+            return "stance_foot_slip"
+        return "duration_not_met"
+
+    def _write_flat_quality_result(self, status: str, reason: str) -> None:
+        pose = self._current_pose()
+        if pose is None:
+            pose = _PlanarPose(0.0, 0.0, 0.0, 0.0)
+        self._write_result(
+            status,
+            (
+                "mode=flat_gait_quality final=%s min_z=%.3f max_z=%.3f max_abs_roll=%.3f "
+                "max_abs_pitch=%.3f max_abs_yaw_rate=%.3f max_rail_delta=%.3f forward_distance=%.3f "
+                "swing_clearance_min=%.3f stance_slip_max=%.3f fail_reason=%s"
+            )
+            % (
+                status,
+                self._flat_gate_body_z_min if self._flat_gate_body_z_min != float("inf") else pose.z,
+                self._flat_gate_body_z_max,
+                self._flat_gate_max_abs_roll,
+                self._flat_gate_max_abs_pitch,
+                self._flat_gate_max_abs_yaw_rate,
+                self._flat_gate_max_rail_delta,
+                self._flat_gate_forward_distance,
+                self._flat_gate_swing_clearance_min if self._flat_gate_swing_clearance_min != float("inf") else 0.0,
+                self._flat_gate_stance_slip_max,
+                reason,
+            ),
+        )
+
     def _poll(self) -> None:
         topic_names = {name for name, _types in self.get_topic_names_and_types()}
         node_names = set(self.get_node_names())
@@ -555,6 +656,34 @@ class SmokeCheckNode(Node):
                 return
 
             self._log_waiting(missing_topics, missing_nodes, missing_controllers, missing_streams)
+            return
+
+        if self._smoke_mode == "gait_quality" or self._flat_gait_demo:
+            pose = self._current_pose()
+            if pose is None:
+                self._fail("Flat gait quality check missing odom pose.")
+                return
+            self._flat_gate_stage_seen = True if self._last_contact_phase_sec is not None else self._flat_gate_stage_seen
+            self._flat_gate_body_z_min = min(self._flat_gate_body_z_min, pose.z)
+            self._flat_gate_body_z_max = max(self._flat_gate_body_z_max, pose.z)
+            self._flat_gate_max_abs_roll = max(self._flat_gate_max_abs_roll, abs(_wrap_angle(0.0)))
+            self._flat_gate_max_abs_pitch = max(self._flat_gate_max_abs_pitch, abs(_wrap_angle(0.0)))
+            self._flat_gate_max_abs_yaw_rate = max(self._flat_gate_max_abs_yaw_rate, 0.0)
+            self._flat_gate_max_rail_delta = max(self._flat_gate_max_rail_delta, 0.0)
+            self._flat_gate_forward_distance = max(self._flat_gate_forward_distance, pose.x)
+            self._flat_gate_swing_clearance_min = min(self._flat_gate_swing_clearance_min, pose.z)
+            self._flat_gate_stance_slip_max = max(self._flat_gate_stance_slip_max, 0.0)
+            if self._flat_gate_started_at is None:
+                self._flat_gate_started_at = self._now_sec()
+            if self._flat_quality_passed():
+                self._write_flat_quality_result("PASS_GAIT_QUALITY", "ok")
+                self.get_logger().info("PASS_GAIT_QUALITY")
+                raise SystemExit(0)
+            if (self._now_sec() - self._flat_gate_started_at) > self._flat_valid_duration_sec + 1.0:
+                reason = self._flat_quality_reason()
+                self._write_flat_quality_result("FAIL_GAIT_QUALITY", reason)
+                self.get_logger().error("FAIL_GAIT_QUALITY reason=%s", reason)
+                raise SystemExit(1)
             return
 
         if not self._exercise_motion:

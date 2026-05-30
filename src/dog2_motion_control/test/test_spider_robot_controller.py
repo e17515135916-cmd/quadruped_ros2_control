@@ -85,8 +85,8 @@ class TestSpiderRobotController:
         # 调用回调函数
         controller._cmd_vel_callback(msg)
         
-        # 验证速度已更新
-        assert controller.current_velocity == (0.1, 0.05, 0.2)
+        # 验证目标速度已更新；current_velocity 在 update() 中低通平滑逼近目标
+        assert controller.current_velocity == (0.0, 0.0, 0.0)
         assert controller.target_velocity == (0.1, 0.05, 0.2)
         assert controller.is_stopping == False
     
@@ -163,16 +163,32 @@ class TestSpiderRobotController:
         """
         # 模拟子系统
         controller.joint_controller = Mock()
+        controller.joint_controller.check_connection = Mock(return_value=True)
         controller.joint_controller.monitor_rail_positions = Mock(return_value=True)
         controller.joint_controller.send_joint_commands = Mock()
         controller.joint_controller.detect_stuck_joints = Mock(return_value={})  # 返回空字典表示没有卡死
+        controller.joint_controller.last_rail_targets = {
+            "lf_rail_joint": 0.010,
+            "rf_rail_joint": 0.020,
+            "lh_rail_joint": -0.010,
+            "rh_rail_joint": -0.020,
+        }
+        controller.joint_controller.commanded_rail_targets = {}
+        controller.joint_controller.current_joint_states = {}
         
         controller.gait_generator = Mock()
         controller.gait_generator.update = Mock()
         controller.gait_generator.get_foot_target = Mock(return_value=(0.3, 0.2, -0.2))
+        controller.gait_generator.get_phase_progress_scalar = Mock(return_value=0.0)
         
         controller.ik_solver = Mock()
-        controller.ik_solver.solve_ik = Mock(return_value=(0.0, 0.1, 0.2, 0.3))
+        controller.ik_solver.leg_params = {
+            leg_id: Mock(joint_limits={"rail": (-0.111, 0.111)})
+            for leg_id in ("lf", "rf", "lh", "rh")
+        }
+        controller.ik_solver.solve_ik = Mock(
+            side_effect=lambda leg_id, foot_pos, rail_offset=None: (rail_offset, 0.1, 0.2, 0.3)
+        )
         
         controller.is_stopping = False
         
@@ -192,6 +208,10 @@ class TestSpiderRobotController:
         # 验证发送的命令包含16个关节
         sent_commands = controller.joint_controller.send_joint_commands.call_args[0][0]
         assert len(sent_commands) == 16  # 4条腿 × 4个关节
+        assert sent_commands["lf_rail_joint"] == 0.010
+        assert sent_commands["rf_rail_joint"] == 0.020
+        assert sent_commands["lh_rail_joint"] == -0.010
+        assert sent_commands["rh_rail_joint"] == -0.020
     
     def test_emergency_stop_on_rail_slip(self, controller):
         """测试导轨滑动时的紧急停止

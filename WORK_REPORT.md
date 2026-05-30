@@ -1479,3 +1479,182 @@
   2. 评估是否需要在 crossing 初段进一步降低/重写前向推进参考，使其更接近 quasi-static body-forward-shift；
   3. 在 `BODY_FORWARD_SHIFT -> FRONT_LEGS_TRANSIT` 之间补更强的阶段约束与失败判定，而不是仅凭 max_x 判断。
 - 如果 classical 方案在更强阶段约束后仍无法稳定把 roll 峰值压下去，再考虑把 crossing 初段做成更明确的学习/优化接口；但当前还没有到必须引入强化学习的程度。
+
+## 2026-04-25 13:00 CST - 验收语义拆分与状态机 hold reason
+
+### 现在想实现什么
+- 不再让 `BODY_FORWARD_SHIFT` 的阶段性通过被误认为“完整越窗成功”。
+- 同时让状态机在卡住时能明确说出为什么不推进，而不是只看到最终停在某个 stage。
+
+### 准备用什么方法实现
+- 先做两类低风险、但对后续开发很关键的改动：
+  1. `crossing_check.py` 拆成 `stage_smoke` 和 `full` 两种模式；
+  2. `crossing_state_machine.cpp` 增加稳定性指标与 hold reason 日志。
+- 这两项都不改主控制架构，也不改 URDF，不会影响 rail/WBC/MPC 主链路。
+
+### 为什么这样做
+- 当前系统已经能到 `BODY_FORWARD_SHIFT`，所以继续只看单个 PASS/FAIL 已经不够。
+- 需要先把“阶段 smoke”与“完整 crossing”分开，否则每一轮收敛都容易出现假进展。
+- 另外，状态机如果不输出卡住原因，后续再改 quasi-static trajectory 或更强姿态约束时，定位效率会很低。
+
+### 当前具体做了哪些操作
+- 修改 `src/dog2_bringup/dog2_bringup/crossing_check.py`：
+  - 新增 `mode` 参数，支持：
+    - `stage_smoke`
+    - `full`
+  - 新增 `PASS_STAGE_SMOKE` / `PASS_FULL` 结果语义；
+  - 新增 `max_abs_roll/max_abs_pitch`、`body_z_min/body_z_max` 判据；
+  - 记录 `stage timeline`；
+  - 对 `abs(roll)` 过大时增加 `POSSIBLE_EULER_WRAP_OR_FLIP` warning。
+- 修改 `src/dog2_bringup/launch/window_crossing_test.launch.py`：
+  - 新增 `crossing_check_mode` launch 参数，并透传给 `crossing_check.py`。
+- 修改 `src/dog2_mpc/include/dog2_mpc/crossing_state_machine.hpp` 与 `src/dog2_mpc/src/crossing_state_machine.cpp`：
+  - 新增 `StageStabilityMetrics`；
+  - 在 `canTransitionToNext()` 里增加更明确的稳定性检查；
+  - 新增 `stage_gate` hold reason 日志，当前至少会区分：
+    - `approach_progress_not_ready`
+    - `rail_compact_body_not_ready`
+    - `front_legs_not_through`
+    - `rear_legs_not_through`
+    - `rail_tracking_unstable`
+    - `support_margin_unstable`
+    - `roll_unstable`
+    - `pitch_unstable`
+    - `yaw_rate_unstable`
+    - `body_z_too_low`
+    - `body_z_too_high`
+    - `insufficient_contacts`
+
+### 过程中遇到了什么问题
+- 代码构建是通过的，但远端验证链路这轮遇到了环境包装层问题：
+  - `ssh dell` 下长命令容易直接 `255` 退出；
+  - 交互 shell 带 prompt / hook，TTY 下长命令会被截断或污染；
+  - `install/setup.bash` / `setup.sh` 链路也存在旧环境残留，导致验证脚本启动不稳。
+
+### 原因判断
+- 这不是当前 crossing 逻辑本身的行为回归，更像是远端 shell / overlay 的工程环境问题。
+- 具体表现为：
+  - `setup.bash` 会去追不存在的 `/home/dell/aperfect/carbot_ws/setup.sh`；
+  - 即使改用脚本执行，也出现 launch 只写入开头日志、没等 `crossing_check` 写结果文件就终止的情况。
+
+### 做了哪些修改和尝试
+- 先顺序构建确认代码本身无编译问题：
+  - `colcon build --packages-select dog2_mpc dog2_bringup --symlink-install`
+  - 通过。
+- 尝试了三种远端验证方式：
+  1. 直接 `ssh dell "bash -lc ..."`；
+  2. 交互 PTY + 手工送命令；
+  3. 先下发脚本再远端执行。
+- 最终确认：
+  - 代码已落到远端并构建成功；
+  - 但这轮新的 `stage_smoke/full` 运行结果还没有拿到稳定有效的结果文件，需要下一轮先把远端 launch 壳层跑顺。
+
+### 当前结果如何，是否成功
+- 成功：
+  - 新的验收语义和状态机 hold-reason 结构已经进代码并构建通过。
+  - 后续阶段失败将不再只剩“停在某个 stage”，而是会有更明确的 block reason。
+- 尚未完成：
+  - 这轮还没有拿到基于新 `crossing_check_mode` 的稳定 `stage_smoke/full` 结果文件；
+  - 主要阻塞在远端 launch / shell 环境，而不是编译或主控制逻辑。
+
+### 下一步准备做什么
+- 先把远端验证入口跑顺，确保能稳定拿到：
+  - `PASS_STAGE_SMOKE`
+  - 或 `FAIL: never reached required stage ...`
+  - 以及对应 `stage timeline`。
+- 然后立即进入真正的行为收敛：
+  1. 改 `trajectory_generator.cpp`，把初段改为 quasi-static reference；
+  2. 用新的 `stage_gate` 日志验证 `BODY_FORWARD_SHIFT -> FRONT_LEGS_TRANSIT` 到底被哪个指标卡住；
+  3. 再决定是否需要在 `mpc_node_complete.cpp` 里进一步增强姿态冻结/前向冻结。
+
+## 2026-04-25 16:11:45 CST - active crossing APPROACH and guard 收敛
+
+1. 现在想实现什么：根据外部静态审阅，验证并修正 active crossing 控制链中仍然 walking 化的 APPROACH，并避免 BODY_FORWARD_SHIFT guard 被错误条件卡死。
+2. 用什么方法：直接检查远端 ~/aperfect/carbot_ws 当前源码，以 mpc_controller.cpp / mpc_node_complete.cpp / crossing_state_machine.cpp 为主刀口做最小修改。
+3. 为什么这样做：远端代码确认 active crossing 初始化后由 MPCController::generateCrossingReference() 写入 x_ref_，APPROACH 仍调用 NormalTrotGait(0.2m/s)，只改 trajectory_generator.cpp 不能覆盖这条主路径。
+4. 具体做了什么：把 active APPROACH 改为 quasi-static creep；把 crossing_approach_speed 默认和 YAML 覆盖降到 0.05；默认关闭 crossing_forward_assist，启用 crossing_force_full_support；给 forward assist 增加 roll/pitch gate；给 base foot x 增加启动日志；给 BODY_FORWARD_SHIFT rail 完成条件加入 0.095m hysteresis 和 per-rail BFS guard 日志；把 max_body_z_for_transit 从 0.30m 改到 0.45m 以匹配当前 nominal_body_height=0.40。
+5. 遇到什么问题：上轮新增的 body_z 上限 0.30m 与当前配置的 0.40m 身高目标冲突，会导致 stage gate 误报 body_z_too_high；同时 scp 上传部分文件时偶发长时间不返回。
+6. 原因判断：body_z guard 参数来自保守建议，但没有结合本仓库当前 nominal_body_height；scp 问题属于远端传输返回不稳定，文件内容最终通过校验确认已写入。
+7. 做了哪些修改和尝试：使用本地 apply_patch 修改文件后同步到远端；对上传不稳定的 YAML 改用 base64 写回并用 grep 验证关键参数。
+8. 当前结果：源码已写入远端，待 colcon build 和 crossing/flat 验证确认。
+9. 下一步：先 build dog2_mpc/dog2_bringup，再做平地 smoke 和 window crossing stage/full 验证；如果 crossing 仍卡住，优先看 BFS guard 的 rail 分腿值和 stage_gate 的 roll/pitch/body_z/rail_err。
+
+## 2026-04-25 16:37:32 CST - 本轮总结：active crossing 路径收敛与 full 验证结论
+
+1. 最终实现了什么：确认外部审阅中关于 active crossing 主路径的判断成立，并把 `MPCController::generateCrossingReference()` 的 active `APPROACH` 从 `NormalTrotGait(0.2m/s)` 改为 0.03m/s quasi-static creep；同时把常用 launch/config 的 crossing approach 默认改成保守模式。
+2. 关键改动有哪些：`research_mpc.yaml`、`control_stack.launch.py`、`system.launch.py`、`crossing_trial.launch.py`、`window_crossing_test.launch.py` 默认使用 `crossing_approach_speed=0.05`、`crossing_force_full_support=true`、`crossing_forward_assist_enabled=false`；`mpc_node_complete.cpp` 增加 base feet x 日志和 forward assist 姿态门控；`crossing_state_machine.cpp/.hpp` 增加 stage stability metrics、rail_err 日志、BODY_FORWARD_SHIFT per-rail BFS guard、rail_done=0.095 hysteresis，并把 body_z gate 改为 0.08~0.45 以匹配当前 0.40m 身高目标；`rail_tracking_error_threshold` 调到 0.020，避免和 0.095 rail_done 容差冲突；`window_crossing_test.launch.py` 修复 preclean pattern 自杀问题；`crossing_trigger_x_threshold` 默认改成 0.0，由 MPC 内部 activation distance 决定真正初始化 crossing。
+3. 验证怎么做的：`colcon build --packages-select dog2_mpc dog2_bringup --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo` 通过；`ros2 launch dog2_bringup smoke_test.launch.py controller_mode:=effort research_stack:=true expect_research_stack:=true exercise_motion:=true ros_domain_id:=64 result_file:=/tmp/dog2_smoke_result.txt` 通过，结果为 `PASS: turn_yaw_delta=1.237 z=0.120`；`window_crossing_test` 的 stage smoke 通过，结果为 `PASS_STAGE_SMOKE ... stage=CROSSING:BODY_FORWARD_SHIFT max_x=1.656 max_rail_delta=0.112`；full 验证失败，结果为 `FAIL: never reached required stage CROSSING:FRONT_LEGS_TRANSIT ... stage=CROSSING:BODY_FORWARD_SHIFT max_x=3.033 min_z=0.043 max_abs_roll=3.142`。
+4. 还剩什么问题：full crossing 仍没有进入 `FRONT_LEGS_TRANSIT`。当前真实阻塞已经不是 trigger 未发出，也不是 active APPROACH 仍走 trot；full run 显示 BODY_FORWARD_SHIFT 中 body_z 掉到约 0.043m，roll 约 pi，stage_gate 持续 `rail_compact_body_not_ready`，BFS guard 显示四个 rail 虽然能单独到限位附近，但不能在机身已稳定支撑的条件下同时保持 `lf/rh >= 0.095` 且 `lh/rf <= -0.095`。这说明初段支撑/姿态失败仍是主因，rail compact 动作在翻倒/低身高状态下变成抖动。
+5. 建议的下一步是什么：不要继续主要放宽 trigger 或 stage pass 条件。下一步应直接处理 PRE_APPROACH/BODY_FORWARD_SHIFT 的姿态表示和准静态支撑：先在 `mpc_node_complete.cpp` 把 roll/pitch 控制误差从 Euler RPY 改成 SO(3)/gravity-vector error，确认 roll≈pi 是真翻倒还是 Euler wrap；然后在 BODY_FORWARD_SHIFT 中冻结/减速 rail target ramp，只有 body_z>0.08、abs(roll)<0.35、yaw_rate<0.4 持续满足时才继续 rail compact；最后再看 WBC 的实际 contact/fz 是否把机身托起。
+
+## 2026-04-25 18:08:14 CST - 姿态误差与 BFS rail gate 收敛
+
+1. 现在想实现什么：解决 window crossing 在 BODY_FORWARD_SHIFT 阶段 min_z 过低、Euler roll 接近 pi、rail 推进过激导致后续阶段不稳定的问题。
+2. 准备用什么方法实现：用 odom quaternion 计算 gravity-vector level attitude，替代 Euler roll/pitch 参与姿态支持和状态机 gate；同时把 BODY_FORWARD_SHIFT 的 rail target 从一步到位改成姿态稳定时慢速 ramp，姿态/高度不稳时冻结到当前 rail 位置。
+3. 为什么选这个方法：active APPROACH 已经静态化，继续调 trigger 或 approach 速度收益小；当前现象更像姿态表示和 BFS rail 推进时序问题，确定性控制修正比引入 RL 更低风险、更可解释。
+4. 当前具体做了哪些操作：修改 mpc_node_complete 保存 quaternion 并计算 roll_like/pitch_like/tilt/body_up_z；修改 applyAttitudeSupport 使用 gravity-vector 误差和按足端力臂的零和垂向力重分配；修改 mpc_controller 增加 setCrossingBfsRailGate 和 rail_ref moveTowards ramp；修改 crossing_state_machine 增加 level attitude metrics 并把 transition stable timer 绑定到 attitude_ok；修改 crossing_check 输出 level tilt/body_up_z 诊断。
+5. 过程中遇到了什么问题：第一次编译发现 mpc_node_complete 中误用了不存在的 extended_srbd_model_ 成员。
+6. 问题的原因判断是什么：该文件只持有 base_foot_positions_，真实 foot position 计算在 MPCController 内部；node 侧姿态力臂分配不能直接调用 extended model。
+7. 做了哪些修改和尝试：把 node 侧姿态重分配的足端力臂先退回 base_foot_positions_，保留按几何力臂分配而不是按腿号硬编码；随后补上 MPCController 到 CrossingStateMachine 的 level attitude 传递。
+8. 当前结果如何，是否成功：colcon build --packages-select dog2_mpc dog2_bringup 已通过，剩余 warning 为既有 unused/reorder 类警告；尚未完成运行验证。
+9. 下一步准备做什么：运行 flat smoke 回归，再运行 window stage/full crossing，重点观察 max_level_tilt、min_body_up_z、BFS rail_gate freeze/ramp 日志和状态机 hold reason。
+
+## 2026-04-25 18:36:15 CST - HOVER 阶段 rail 漂移与预触发速度收敛
+
+1. 现在想实现什么：继续解决 window crossing 在真正进入 crossing 前就出现 HOVER/站立阶段 rail 漂移、机身塌陷和翻倒的问题。
+2. 准备用什么方法实现：把 HOVER rail hold 做成 window crossing 专用可配置项，并修正 crossing_trigger 在姿态失稳时没有清零上一条 `/cmd_vel` 的时序问题。
+3. 为什么选这个方法：上一次验证显示 trigger gate 阻止 crossing 后，机器人仍在 `stage=HOVER` 下前进到 `max_x=5.033` 并出现 `min_body_up_z=-1.000`，说明问题不只在 BODY_FORWARD_SHIFT，而是 crossing 触发前已有控制命令或 rail 漂移导致站立/缓行失稳。
+4. 当前具体做了哪些操作：检查 `crossing_trigger.py` 后发现它会在“已稳定但未到 trigger x”时发布非零 `/cmd_vel`，但随后若姿态失稳只是不触发 crossing，没有主动发零速；检查 `wbc_node_complete.cpp` 后确认 rail hold 不覆盖 `HOVER`。
+5. 过程中遇到了什么问题：远端没有 `apply_patch` 命令，不能直接在 ssh 会话里用补丁工具编辑。
+6. 问题的原因判断是什么：这是远端工具链限制，不是代码问题；为避免直接用脚本粗暴改文件，改为把远端文件复制到本地临时副本，用 `apply_patch` 生成补丁后再同步回远端。
+7. 做了哪些修改和尝试：为 WBC 增加 `rail_hold_hover_enabled` 参数，默认 false；在 `control_stack.launch.py` / `system.launch.py` 中透传该参数；在 `crossing_trial.launch.py` 和 `window_crossing_test.launch.py` 中默认启用 HOVER rail hold，并把 `pre_crossing_cmd_vel_x` 默认设为 0.0、`crossing_trigger_x_threshold` 设为 -0.02，使 crossing 在稳定后直接触发而不是依赖预触发走动；修改 `crossing_trigger.py`，当 stack 不新鲜或姿态不稳定时，如果之前发过 approach `/cmd_vel`，立即发布零速。
+8. 当前结果如何，是否成功：补丁已在本地临时副本完成，待同步回远端、构建和验证。
+9. 下一步准备做什么：同步文件到 `~/aperfect/carbot_ws`，构建 `dog2_wbc` 和 `dog2_bringup`，先跑 flat smoke 确认默认 false 不影响平地，再跑 window stage smoke 观察 HOVER rail 是否被压住、trigger 是否稳定触发、是否仍出现真实翻倒。
+
+## 2026-04-25 18:48:52 CST - HOVER rail effort 动态冻结方案
+
+1. 现在想实现什么：继续压住 crossing 触发前 HOVER 阶段的 rail 漂移和翻倒，确认问题是否来自 WBC 支撑力经雅可比映射到移动副通道。
+2. 准备用什么方法实现：不再用 WBC 里的 PD rail hold 硬追零，而是在 `wbc_effort_mux` 输出到 16 通道 effort_controller 前，按 `/dog2/mpc/crossing_state` 动态把 rail effort 置零。
+3. 为什么选这个方法：A/B 验证显示 HOVER rail hold 会饱和到 ±70N 且不能阻止 rail 到限位；关闭 HOVER rail hold 后仍失败，但 `max_x` 从 2.554 降到 1.752，说明 rail hold 不是根因且可能增加冲击。真正需要的是让 HOVER/PRE_APPROACH/APPROACH 的支撑力不要进入 rail effort 通道，rail 只在 BODY_FORWARD_SHIFT 之后参与重排。
+4. 当前具体做了哪些操作：检查 `wbc_effort_mux.py` 发现已有静态 `freeze_rail_effort`，但没有按 crossing stage 动态冻结；检查 `wbc_controller.cpp` 发现滑动副力来自 `J^T f` 的第 4 维，垂向/前向支撑可能间接生成 rail effort。
+5. 过程中遇到了什么问题：一次 A/B 命令以 ssh 255 退出，后来确认是 launch 还在远端运行；另一次带 `crossing_trigger_x_threshold:=...` 的命令会被 window test 的 preclean pattern 自杀式匹配。
+6. 问题的原因判断是什么：`pkill -f [c]rossing_trigger` 会匹配命令行中的 `crossing_trigger_x_threshold` 字符串，导致 launch shell 被清掉；远端长命令 255 是 ssh 包装层问题，不代表 launch 本身失败。
+7. 做了哪些修改和尝试：给 `wbc_effort_mux.py` 增加 `/dog2/mpc/crossing_state` 订阅和两个参数 `freeze_rail_effort_in_hover`、`freeze_rail_effort_in_crossing_staging`；在 HOVER、CROSSING:PRE_APPROACH、CROSSING:APPROACH 中按参数把 rail_cmd 置零，BODY_FORWARD_SHIFT 后放开；在 `control_stack.launch.py` / `system.launch.py` 中透传参数；在 `crossing_trial.launch.py` / `window_crossing_test.launch.py` 中默认启用动态 rail effort freeze；同时把 window preclean 中的 crossing_trigger 匹配改成更具体的 installed executable/node name，避免 CLI 参数自杀。
+8. 当前结果如何，是否成功：补丁已在本地临时副本完成，待同步、构建、flat smoke 和 window stage 验证。
+9. 下一步准备做什么：同步远端后重建 dog2_bringup，先确认 flat smoke 不受影响，再跑 window stage smoke；如果 HOVER 仍翻倒但 rail_delta 明显下降，下一步就转向 body height/posture reference；如果 rail_delta 仍到 0.111，则需要检查 effort_controller 是否还在通过 position interface 或其它路径驱动 rail。
+
+## 2026-04-25 18:56:30 CST - HOVER body height 目标修正
+
+1. 现在想实现什么：解决 HOVER 阶段即使 rail effort 在 mux 输出中为 0，机器人仍持续翻倒、body_z 掉到 0.043m、trigger 无法稳定触发的问题。
+2. 准备用什么方法实现：把 `research_mpc.yaml` 的 nominal body height 和 vertical support target 从 0.40m 降到与当前仿真稳定高度一致的 0.16m，并降低垂向支撑增益/单腿最大补偿，避免 HOVER 长期用 400N 顶机身。
+3. 为什么选这个方法：flat smoke 的通过结果显示实际 body z 通常在 0.09~0.17m；window HOVER 日志显示当前 target=0.40m 导致 `fz=400N` 几乎持续打满，机身被过强垂向支撑和姿态扰动反复掀翻。继续调 trigger 或 rail freeze 不能解决这个基础站立目标不一致。
+4. 当前具体做了哪些操作：对比 flat smoke 和 window HOVER 日志，确认 `nominal_body_height=0.40` 与当前机器人稳定姿态不匹配；动态 rail effort freeze 生效时 mux 日志显示四个 rail 输出均为 0，但 rail 仍能被机体运动带到限位，说明 rail 只是后果之一。
+5. 过程中遇到了什么问题：window stage run 在动态 rail freeze 后仍失败，最终 `max_x=10.036`、`min_z=0.043`、`max_level_tilt=3.142`，且没有触发 crossing。
+6. 问题的原因判断是什么：HOVER 不是静止稳定状态；过高 body height 目标和过强 vertical support 让机器人在 crossing 前就进入翻倒/滚动，trigger gate 正确地阻止 crossing，但无法恢复站立。
+7. 做了哪些修改和尝试：把 `nominal_body_height` 和 `vertical_support_target_height` 改为 0.16；把 `vertical_support_kp` 从 700 降到 350、`kd` 从 90 降到 60、`min_total_force_multiplier` 从 1.20 降到 1.08、`max_leg_force` 从 100 降到 75、`height_error_limit` 从 0.25 降到 0.12；把 `attitude_support_max_leg_delta` 从 24 降到 18，避免姿态补偿单腿差分过激。
+8. 当前结果如何，是否成功：配置补丁已在本地临时副本完成，待同步、build 和 flat/window 验证。
+9. 下一步准备做什么：同步配置并重建 dog2_bringup；先跑 flat smoke 确认低 body target 不破坏平地，再跑 window stage smoke 观察 HOVER 的 `min_z/max_level_tilt/min_body_up_z` 和 trigger 是否能进入 crossing。
+
+## 2026-04-25 19:02:37 CST - HOVER 足端力 sanitizer
+
+1. 现在想实现什么：阻止 HOVER 阶段 MPC/QP 输出过大的足端力和水平力，避免 crossing 触发前机器人被自身控制力推走或掀翻。
+2. 准备用什么方法实现：在 `mpc_node_complete.cpp` 中增加只作用于 `Mode::HOVER` 的足端力后处理，发布前清零每条腿的 `fx/fy`，并把每腿 `fz` 限制到 18~55N。
+3. 为什么选这个方法：降低 body height target 后 flat smoke 仍通过，但日志显示 HOVER 中 `fz=400N` 仍持续出现，说明过大足端力主要来自 MPC/QP 原始解，而 `applyVerticalSupport()` 只会提高下限不会降低上限。HOVER 本来应该是静止等待触发，不应该输出水平足端力或每腿 100N 的支撑力。
+4. 当前具体做了哪些操作：检查 `applyVerticalSupport()`，确认它使用 `max(existing_fz, per_leg_force)`，不会削弱 QP 的 400N；检查 window 日志，确认 mux 输出 rail=0 后机器人仍在 HOVER 翻倒，说明要先约束 HOVER 足端力本身。
+5. 过程中遇到了什么问题：dynamic rail effort freeze、低 body target 都没有让 window trigger 稳定触发；window 仍以 `stage=HOVER` 失败，`max_level_tilt=3.142`。
+6. 问题的原因判断是什么：HOVER 不是安全等待状态，MPC 原始解中的大 `fz` 和水平力会让机器人在 crossing trigger 前持续激励机身姿态，导致 trigger gate 正确地不触发。
+7. 做了哪些修改和尝试：新增参数 `hover_force_sanitize_enabled`、`hover_force_max_leg_fz`、`hover_force_min_leg_fz`；新增 `applyHoverForceSanitizer()`；在 MPC solve 成功和 fallback 两条路径发布 foot forces 前调用；在 YAML 中默认启用，范围设为 18~55N；WALKING 和 CROSSING 不受此 sanitizer 影响。
+8. 当前结果如何，是否成功：补丁已在本地临时副本完成，待同步、构建、flat smoke 和 window stage smoke 验证。
+9. 下一步准备做什么：重建 dog2_mpc/dog2_bringup；先确认 flat smoke；再看 window HOVER 日志中 `fz` 是否不再 400N、`max_x` 是否不再漂到数米、trigger 是否能发出。
+
+## 2026-04-25 19:10:38 CST - HOVER sanitizer 验证和 flat smoke 回归
+
+1. 现在想实现什么：确认 HOVER 足端力 sanitizer 是否真实进入 active control path，并确认它不会破坏平地 smoke 回归。
+2. 准备用什么方法实现：重跑 `smoke_test.launch.py`，直接观察 `MPC:` 和 `MPC leg_forces:` 日志中的 HOVER 总 `fz`、单腿 `fz`、水平力，以及最终 stand/forward/turn 结果。
+3. 为什么选这个方法：前一轮失败有一次是 controller cold-start readiness，不足以判断代码行为；flat smoke 是当前最小回归保护，且能直接暴露 HOVER sanitizer 是否误伤 WALKING。
+4. 当前具体做了哪些操作：使用 ROS_DOMAIN_ID=85 运行 effort research stack flat smoke，保留 `/tmp/dog2_smoke_85.log` 和 `/tmp/dog2_smoke_result_85.txt`。
+5. 过程中遇到了什么问题：控制器加载仍有几秒延迟，smoke check 前几轮等待 `effort_controller` / `joint_state_broadcaster`，但这次 controller_manager 最终正常加载并激活。
+6. 问题的原因判断是什么：这是 Gazebo/ros2_control 冷启动时序随机性，不是 sanitizer 编译或运行路径问题；等待后控制链路恢复。
+7. 做了哪些修改和尝试：本阶段没有新增代码，只验证最新补丁。HOVER 日志显示总 `fz=220N`，四腿各 `55N`，`fx/fy=0`；切到 WALKING 后 sanitizer 不再作用，MPC 又输出每腿约 `100N` 的 walking 支撑力。
+8. 当前结果如何，是否成功：flat smoke 通过，结果为 `PASS: turn_yaw_delta=3.080 z=0.057`。HOVER sanitizer 已确认生效，且没有破坏平地 stand/forward/turn 回归。
+9. 下一步准备做什么：进入 window stage smoke，重点看 HOVER 是否还会在 crossing trigger 前翻倒；如果 HOVER 稳定但未触发，继续调 trigger/稳定门控；如果仍翻倒，则问题转向 joint posture/WBC 力矩映射或初始姿态，而不是 MPC HOVER 足端力过大。

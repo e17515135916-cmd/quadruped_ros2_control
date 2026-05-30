@@ -9,11 +9,13 @@ excluded from the leg maps.
 from __future__ import annotations
 
 import argparse
+import math
 import os
 from pathlib import Path
 import re
 import sys
 import tempfile
+import time
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import xml.etree.ElementTree as ET
 
@@ -474,6 +476,10 @@ def draw_pybullet_gui(
     leg_map: Mapping[str, Sequence[str]],
     foot_links: Mapping[str, str],
     package_map: Mapping[str, Path],
+    robot_config: Mapping[str, Any],
+    rail_controller: Optional[RailLockController] = None,
+    apply_rail_lock: bool = False,
+    dynamic_gui: bool = False,
 ) -> None:
     try:
         import pybullet as p
@@ -489,7 +495,9 @@ def draw_pybullet_gui(
 
     p.connect(p.GUI)
     p.setAdditionalSearchPath(pybullet_data.getDataPath())
-    body_id = p.loadURDF(temp_urdf, useFixedBase=False)
+    p.setGravity(0.0, 0.0, 0.0)
+    p.loadURDF("plane.urdf")
+    body_id = p.loadURDF(temp_urdf, useFixedBase=not dynamic_gui)
     joint_name_to_index = {}
     link_name_to_index = {}
     for joint_index in range(p.getNumJoints(body_id)):
@@ -499,10 +507,60 @@ def draw_pybullet_gui(
         joint_name_to_index[joint_name] = joint_index
         link_name_to_index[link_name] = joint_index
 
+    pybullet_cfg = ((robot_config.get("simulation") or {}).get("pybullet") or {})
+    base_rpy = pybullet_cfg.get("base_orientation_rpy", [0.0, 0.0, 0.0])
+    base_quat = p.getQuaternionFromEuler([float(v) for v in base_rpy])
+    p.resetBasePositionAndOrientation(body_id, [0.0, 0.0, 0.42], base_quat)
+    rail_cfg = robot_config.get("rail") or {}
+    rail_source = str(rail_cfg.get("lock_position_source", "initial"))
+    rail_default = float(rail_cfg.get("lock_position", 0.0))
+    rail_map = {
+        str(name): float(value)
+        for name, value in (rail_cfg.get("lock_position_map", {}) or {}).items()
+    }
+    for rail_name in rail_names:
+        if rail_name in joint_name_to_index:
+            rail_q = rail_map.get(rail_name, rail_default) if rail_source == "configured" else 0.0
+            p.resetJointState(body_id, joint_name_to_index[rail_name], rail_q, 0.0)
+    for leg_cfg in (robot_config.get("legs") or {}).values():
+        joint_names = leg_cfg.get("joint_names", []) or []
+        default_q = leg_cfg.get("default_stand_q", []) or []
+        for index, joint_name in enumerate(joint_names):
+            if joint_name in joint_name_to_index and index < len(default_q):
+                p.resetJointState(body_id, joint_name_to_index[joint_name], float(default_q[index]), 0.0)
+    foot_z = []
+    for foot_link in foot_links.values():
+        if foot_link in link_name_to_index:
+            foot_z.append(p.getLinkState(body_id, link_name_to_index[foot_link])[0][2])
+    if foot_z:
+        base_pos, base_quat_current = p.getBasePositionAndOrientation(body_id)
+        p.resetBasePositionAndOrientation(
+            body_id,
+            [base_pos[0], base_pos[1], base_pos[2] + (0.014 - min(foot_z))],
+            base_quat_current,
+        )
+
+    if apply_rail_lock:
+        if rail_controller is None:
+            raise RuntimeError("apply_rail_lock requires a RailLockController.")
+        rail_state = {
+            name: p.getJointState(body_id, joint_name_to_index[name])[:2]
+            for name in rail_controller.rail_joint_names
+            if name in joint_name_to_index
+        }
+        rail_controller.initialize(rail_state)
+        rail_controller.apply_pybullet_position_lock(p, body_id, joint_name_to_index)
+
     p.addUserDebugText(f"base frame: {base_link}", [0, 0, 0.25], textColorRGB=[1, 1, 1], textSize=1.3)
     p.addUserDebugLine([0, 0, 0], [0.15, 0, 0], [1, 0, 0], lineWidth=3)
     p.addUserDebugLine([0, 0, 0], [0, 0.15, 0], [0, 1, 0], lineWidth=3)
     p.addUserDebugLine([0, 0, 0], [0, 0, 0.15], [0, 0.4, 1], lineWidth=3)
+    mode_text = (
+        "rail lock ACTIVE; dynamic stand pose display"
+        if apply_rail_lock
+        else f"static structure display; base rpy={[round(math.degrees(float(v)), 1) for v in base_rpy]} deg"
+    )
+    p.addUserDebugText(mode_text, [0, 0, 0.35], textColorRGB=[0, 1, 1], textSize=1.1)
 
     for rail_name in rail_names:
         joint_index = joint_name_to_index.get(rail_name)
@@ -510,7 +568,8 @@ def draw_pybullet_gui(
             continue
         link_state = p.getLinkState(body_id, joint_index)
         pos = link_state[0]
-        p.addUserDebugText(f"{rail_name}: locked", pos, textColorRGB=[0, 1, 1], textSize=1.0)
+        label = "active lock" if apply_rail_lock else "rail joint"
+        p.addUserDebugText(f"{rail_name}: {label}", pos, textColorRGB=[0, 1, 1], textSize=1.0)
 
     for leg, names in leg_map.items():
         color = [1, 0.6, 0] if leg in {"FL", "RR"} else [0.2, 0.6, 1]
@@ -526,10 +585,40 @@ def draw_pybullet_gui(
             joint_pos = p.getLinkState(body_id, joint_index)[0]
             p.addUserDebugText(joint_name, joint_pos, textColorRGB=color, textSize=0.8)
 
-    print("[INFO] PyBullet GUI is open. Press Ctrl+C in this terminal to exit.")
+    if apply_rail_lock:
+        print("[INFO] PyBullet GUI is open with active rail position lock.")
+        if dynamic_gui:
+            print("[INFO] Dynamic GUI enabled; watch terminal rail_error warnings.")
+        else:
+            print("[INFO] Static/fixed-base GUI enabled; use 02_stand_test.py --gui for dynamics.")
+    else:
+        print("[INFO] PyBullet GUI is static structure-only: fixed base, zero gravity, no dynamics stepping.")
+        print("[INFO] Use 02_stand_test.py --gui for the dynamic stand test.")
+    print("[INFO] Press Ctrl+C in this terminal to exit.")
+    sim_step = 0
     try:
         while True:
-            p.stepSimulation()
+            if apply_rail_lock and rail_controller is not None:
+                rail_state = {
+                    name: p.getJointState(body_id, joint_name_to_index[name])[:2]
+                    for name in rail_controller.rail_joint_names
+                    if name in joint_name_to_index
+                }
+                commands = rail_controller.compute(rail_state)
+                rail_controller.apply_pybullet_position_lock(p, body_id, joint_name_to_index)
+                if sim_step % 240 == 0:
+                    for command in commands.values():
+                        status = "SAFETY" if command.safety_stop else "WARN" if command.warning else "OK"
+                        print(
+                            f"[{status}] {command.joint_name}: "
+                            f"q={command.q:.6f} q0={command.q0:.6f} "
+                            f"error={command.error:.6f} force={command.force:.3f}"
+                        )
+            if dynamic_gui:
+                p.stepSimulation()
+            else:
+                time.sleep(0.05)
+            sim_step += 1
     except KeyboardInterrupt:
         pass
     finally:
@@ -546,6 +635,16 @@ def main() -> int:
     parser.add_argument("--rail-config", default=str(PROJECT_ROOT / "config" / "rail_config.yaml"))
     parser.add_argument("--report", default=str(PROJECT_ROOT / "robot_structure_report.md"))
     parser.add_argument("--gui", action="store_true", help="Open optional PyBullet GUI annotations.")
+    parser.add_argument(
+        "--apply-rail-lock",
+        action="store_true",
+        help="In PyBullet GUI, actively lock rail joints at their initial q using RailLockController.",
+    )
+    parser.add_argument(
+        "--dynamic-gui",
+        action="store_true",
+        help="Let 00_print_robot_structure.py step PyBullet dynamics. Off by default to avoid contact explosions.",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config).resolve()
@@ -640,7 +739,18 @@ def main() -> int:
             print(f"- {message}")
 
     if args.gui:
-        draw_pybullet_gui(urdf_text, base_link, rail_names, leg_map, foot_links, package_map)
+        draw_pybullet_gui(
+            urdf_text,
+            base_link,
+            rail_names,
+            leg_map,
+            foot_links,
+            package_map,
+            robot_config,
+            rail_controller=rail_controller,
+            apply_rail_lock=args.apply_rail_lock,
+            dynamic_gui=args.dynamic_gui,
+        )
 
     if not validation_ok:
         print("\n[ERROR] Joint mapping is not clear. Fill robot_config.yaml manually before gait work.")

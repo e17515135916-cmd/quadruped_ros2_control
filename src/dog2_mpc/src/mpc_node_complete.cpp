@@ -11,7 +11,9 @@
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <Eigen/Dense>
+#include <Eigen/Geometry>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <sstream>
 
@@ -47,6 +49,19 @@ public:
     }
 
 private:
+    struct LevelAttitudeError {
+        double roll_like = 0.0;
+        double pitch_like = 0.0;
+        double tilt = 0.0;
+        double body_up_z = 1.0;
+        bool valid = false;
+        bool inverted = false;
+    };
+
+    static double clampDouble(double v, double lo, double hi) {
+        return std::max(lo, std::min(hi, v));
+    }
+
     void initializeParameters() {
         // 声明参数
         this->declare_parameter("mass", 11.8);
@@ -56,7 +71,7 @@ private:
         this->declare_parameter("enable_sliding_constraints", true);
         this->declare_parameter("mode", "hover");  // hover, walking, crossing
         this->declare_parameter("slack_linear_weight", 5e3);
-        this->declare_parameter("rail_tracking_error_threshold", 0.005);
+        this->declare_parameter("rail_tracking_error_threshold", 0.020);
         this->declare_parameter("support_polygon_margin_threshold", 0.015);
         this->declare_parameter("crossing_transition_stable_time", 0.15);
         this->declare_parameter("default_stance_length", 0.40);
@@ -72,7 +87,7 @@ private:
         this->declare_parameter("crossing_window_top_height", 0.62);
         this->declare_parameter("crossing_window_safety_margin", 0.04);
         this->declare_parameter("crossing_activation_distance", 0.25);
-        this->declare_parameter("crossing_approach_speed", 0.15);
+        this->declare_parameter("crossing_approach_speed", 0.05);
         this->declare_parameter("vertical_support_enabled", true);
         this->declare_parameter("vertical_support_target_height", 0.0);
         this->declare_parameter("vertical_support_kp", 700.0);
@@ -80,6 +95,9 @@ private:
         this->declare_parameter("vertical_support_min_total_force_multiplier", 1.20);
         this->declare_parameter("vertical_support_max_leg_force", 100.0);
         this->declare_parameter("vertical_support_height_error_limit", 0.25);
+        this->declare_parameter("hover_force_sanitize_enabled", true);
+        this->declare_parameter("hover_force_max_leg_fz", 55.0);
+        this->declare_parameter("hover_force_min_leg_fz", 18.0);
         this->declare_parameter("attitude_support_enabled", true);
         this->declare_parameter("attitude_support_roll_target", 0.0);
         this->declare_parameter("attitude_support_pitch_target", 0.0);
@@ -88,10 +106,22 @@ private:
         this->declare_parameter("attitude_support_pitch_kp", 140.0);
         this->declare_parameter("attitude_support_pitch_kd", 18.0);
         this->declare_parameter("attitude_support_max_leg_delta", 24.0);
-        this->declare_parameter("crossing_forward_assist_enabled", true);
+        this->declare_parameter("crossing_forward_assist_enabled", false);
         this->declare_parameter("crossing_forward_assist_force_per_leg", 14.0);
-        this->declare_parameter("crossing_force_full_support", false);
+        this->declare_parameter("crossing_forward_assist_pre_approach_enabled", false);
+        this->declare_parameter("crossing_force_full_support", true);
         this->declare_parameter("crossing_freeze_rail_targets", false);
+        this->declare_parameter("bfs_rail_ramp_enabled", true);
+        this->declare_parameter("bfs_rail_ramp_rate", 0.015);
+        this->declare_parameter("bfs_rail_ramp_slow_scale", 0.25);
+        this->declare_parameter("bfs_attitude_gate_roll", 0.30);
+        this->declare_parameter("bfs_attitude_gate_pitch", 0.25);
+        this->declare_parameter("bfs_attitude_gate_tilt", 0.40);
+        this->declare_parameter("bfs_attitude_gate_up_z", 0.85);
+        this->declare_parameter("bfs_attitude_gate_angular_rate", 1.20);
+        this->declare_parameter("bfs_min_body_z_for_ramp", 0.080);
+        this->declare_parameter("bfs_hard_fail_body_z", 0.055);
+        
         
         // 获取参数
         mass_ = this->get_parameter("mass").as_double();
@@ -195,6 +225,13 @@ private:
                                 -half_length,  half_width, -nominal_body_height_;
         base_foot_positions_.rowwise() += com_offset_.transpose();
         mpc_controller_->setBaseFootPositions(base_foot_positions_);
+
+        RCLCPP_INFO(this->get_logger(),
+                    "Base feet x (lf,lh,rh,rf) relative to body: [%.3f, %.3f, %.3f, %.3f]",
+                    base_foot_positions_(0, 0),
+                    base_foot_positions_(1, 0),
+                    base_foot_positions_(2, 0),
+                    base_foot_positions_(3, 0));
         
         // 初始化滑动副速度
         Eigen::Vector4d sliding_velocity = Eigen::Vector4d::Zero();
@@ -248,6 +285,24 @@ private:
         double qy = msg->pose.pose.orientation.y;
         double qz = msg->pose.pose.orientation.z;
         double qw = msg->pose.pose.orientation.w;
+
+        Eigen::Quaterniond q_wb(qw, qx, qy, qz);
+        if (std::isfinite(q_wb.w()) &&
+            std::isfinite(q_wb.x()) &&
+            std::isfinite(q_wb.y()) &&
+            std::isfinite(q_wb.z()) &&
+            q_wb.norm() > 1e-6) {
+            current_body_q_wb_ = q_wb.normalized();
+            current_body_q_valid_ = true;
+            const LevelAttitudeError level_err =
+                computeLevelAttitudeErrorFromQuat(current_body_q_wb_);
+            if (level_err.valid) {
+                last_level_roll_like_ = level_err.roll_like;
+                last_level_pitch_like_ = level_err.pitch_like;
+                last_level_tilt_ = level_err.tilt;
+                last_body_up_z_ = level_err.body_up_z;
+            }
+        }
         
         double sinr_cosp = 2.0 * (qw * qx + qy * qz);
         double cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy);
@@ -294,6 +349,24 @@ private:
             } else if (msg->name[i] == "j4" || msg->name[i] == "rf_rail_joint") {
                 sliding_positions(3) = msg->position[i];
                 sliding_velocities(3) = vel;
+            } else if (msg->name[i].find("hip_roll") != std::string::npos ||
+                       msg->name[i].find("_haa_joint") != std::string::npos ||
+                       msg->name[i].find("_coxa_joint") != std::string::npos) {
+                int leg = getLegIdFromName(msg->name[i]);
+                if (leg >= 0) current_joint_angles_[leg](0) = msg->position[i];
+            } else if (msg->name[i].find("hip_pitch") != std::string::npos ||
+                       msg->name[i].find("_hfe_joint") != std::string::npos ||
+                       msg->name[i].find("_femur_joint") != std::string::npos) {
+                int leg = getLegIdFromName(msg->name[i]);
+                if (leg >= 0) current_joint_angles_[leg](1) = msg->position[i];
+            } else if (msg->name[i].find("knee") != std::string::npos ||
+                       msg->name[i].find("_kfe_joint") != std::string::npos ||
+                       msg->name[i].find("_tibia_joint") != std::string::npos) {
+                int leg = getLegIdFromName(msg->name[i]);
+                if (leg >= 0) {
+                    current_joint_angles_[leg](2) = msg->position[i];
+                    leg_joint_received_[leg] = true;
+                }
             }
         }
         
@@ -301,7 +374,26 @@ private:
         current_sliding_velocities_ =
             sanitizeSlidingVelocities(sliding_positions, sliding_velocities);
         mpc_controller_->setSlidingVelocity(current_sliding_velocities_);
+        measured_leg_configs_valid_ =
+            leg_joint_received_[0] &&
+            leg_joint_received_[1] &&
+            leg_joint_received_[2] &&
+            leg_joint_received_[3];
         joint_received_ = true;
+    }
+
+    std::array<CrossingStateMachine::LegConfiguration, 4> estimateMeasuredLegConfigurations() const {
+        std::array<CrossingStateMachine::LegConfiguration, 4> configs;
+        for (int i = 0; i < 4; ++i) {
+            if (leg_joint_received_[i]) {
+                configs[i] = (current_joint_angles_[i](2) < 0.0)
+                    ? CrossingStateMachine::LegConfiguration::ELBOW
+                    : CrossingStateMachine::LegConfiguration::KNEE;
+            } else {
+                configs[i] = CrossingStateMachine::LegConfiguration::ELBOW;
+            }
+        }
+        return configs;
     }
 
     Eigen::Vector4d sanitizeSlidingVelocities(const Eigen::Vector4d& positions,
@@ -464,12 +556,33 @@ private:
         
         // 设置MPC参考轨迹
         mpc_controller_->setReference(x_ref);
+        updateBfsRailGate();
 
         const bool use_gait_contact_mask =
             (current_mode_ == TrajectoryGenerator::Mode::WALKING || crossing_pre_approach);
         ContactDetector::ContactState contact_state =
             computeCommandContactState(crossing_pre_approach);
         
+        // 注入真实腿部构型（让状态机使用真实测量值而非 stage 期望值）
+        {
+            auto measured_configs = estimateMeasuredLegConfigurations();
+            mpc_controller_->setMeasuredLegConfigurations(measured_configs, measured_leg_configs_valid_);
+        }
+        {
+            auto mc = estimateMeasuredLegConfigurations();
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                       "Leg configs: valid=%d lf=%s lh=%s rh=%s rf=%s tibia=[%.3f,%.3f,%.3f,%.3f]",
+                       measured_leg_configs_valid_ ? 1 : 0,
+                       (mc[0] == CrossingStateMachine::LegConfiguration::ELBOW ? "E" : "K"),
+                       (mc[1] == CrossingStateMachine::LegConfiguration::ELBOW ? "E" : "K"),
+                       (mc[2] == CrossingStateMachine::LegConfiguration::ELBOW ? "E" : "K"),
+                       (mc[3] == CrossingStateMachine::LegConfiguration::ELBOW ? "E" : "K"),
+                       current_joint_angles_[0](2),
+                       current_joint_angles_[1](2),
+                       current_joint_angles_[2](2),
+                       current_joint_angles_[3](2));
+        }
+
         // 求解MPC
         Eigen::VectorXd u_optimal;
         bool success = mpc_controller_->solve(extended_state, u_optimal);
@@ -484,6 +597,7 @@ private:
                                  crossing_pre_approach);
             applyCrossingForwardAssist(u_optimal, contact_state, use_gait_contact_mask,
                                        crossing_pre_approach);
+            applyHoverForceSanitizer(u_optimal);
             publishCrossingState();
             publishFootForces(u_optimal);
             return;
@@ -500,6 +614,7 @@ private:
                              crossing_pre_approach);
         applyCrossingForwardAssist(u_optimal, contact_state, use_gait_contact_mask,
                                    crossing_pre_approach);
+        applyHoverForceSanitizer(u_optimal);
         
         // 发布足端力
         publishFootForces(u_optimal);
@@ -513,7 +628,7 @@ private:
             const double total_fz =
                 u_optimal(2) + u_optimal(5) + u_optimal(8) + u_optimal(11);
             RCLCPP_INFO(this->get_logger(),
-                       "MPC: t=%.2fms, h=%.3fm, vz=%.3fm/s, fz=%.1fN, mode=%s, stage=%s, full_support=%d, freeze_rails=%d, rails=[%.3f,%.3f,%.3f,%.3f], contacts=[%d,%d,%d,%d]",
+                       "MPC: t=%.2fms, h=%.3fm, vz=%.3fm/s, fz=%.1fN, mode=%s, stage=%s, full_support=%d, freeze_rails=%d, bfs_freeze=%d, rails=[%.3f,%.3f,%.3f,%.3f], contacts=[%d,%d,%d,%d]",
                        mpc_controller_->getSolveTime(),
                        current_srbd_state_(2),
                        current_srbd_state_(8),
@@ -522,6 +637,7 @@ private:
                        crossing_stage.c_str(),
                        crossing_force_full_support_ ? 1 : 0,
                        crossing_freeze_rail_targets_ ? 1 : 0,
+                       last_bfs_rail_freeze_ ? 1 : 0,
                        current_sliding_positions_(0),
                        current_sliding_positions_(1),
                        current_sliding_positions_(2),
@@ -531,9 +647,13 @@ private:
                        contact_state.in_contact[2],
                        contact_state.in_contact[3]);
             RCLCPP_INFO(this->get_logger(),
-                       "MPC attitude: roll=%.3f pitch=%.3f wx=%.3f wy=%.3f att_dz=[%.1f,%.1f,%.1f,%.1f] err=[%.3f,%.3f]",
+                       "MPC attitude: euler=[%.3f,%.3f] level=[%.3f,%.3f] tilt=%.3f up_z=%.3f wx=%.3f wy=%.3f att_dz=[%.1f,%.1f,%.1f,%.1f] err=[%.3f,%.3f]",
                        current_srbd_state_(3),
                        current_srbd_state_(4),
+                       last_level_roll_like_,
+                       last_level_pitch_like_,
+                       last_level_tilt_,
+                       last_body_up_z_,
                        current_srbd_state_(9),
                        current_srbd_state_(10),
                        last_attitude_support_delta_(0),
@@ -561,6 +681,15 @@ private:
             std::max(0.0, this->get_parameter("vertical_support_max_leg_force").as_double());
         vertical_support_height_error_limit_ =
             std::max(0.0, this->get_parameter("vertical_support_height_error_limit").as_double());
+        hover_force_sanitize_enabled_ =
+            this->get_parameter("hover_force_sanitize_enabled").as_bool();
+        hover_force_max_leg_fz_ =
+            std::max(0.0, this->get_parameter("hover_force_max_leg_fz").as_double());
+        hover_force_min_leg_fz_ =
+            clampDouble(
+                this->get_parameter("hover_force_min_leg_fz").as_double(),
+                0.0,
+                hover_force_max_leg_fz_);
         attitude_support_enabled_ =
             this->get_parameter("attitude_support_enabled").as_bool();
         attitude_support_roll_target_ =
@@ -581,13 +710,161 @@ private:
             this->get_parameter("crossing_forward_assist_enabled").as_bool();
         crossing_forward_assist_force_per_leg_ =
             std::max(0.0, this->get_parameter("crossing_forward_assist_force_per_leg").as_double());
+        crossing_forward_assist_pre_approach_enabled_ =
+            this->get_parameter("crossing_forward_assist_pre_approach_enabled").as_bool();
         crossing_force_full_support_ =
             this->get_parameter("crossing_force_full_support").as_bool();
         crossing_freeze_rail_targets_ =
             this->get_parameter("crossing_freeze_rail_targets").as_bool();
+        bfs_rail_ramp_enabled_ =
+            this->get_parameter("bfs_rail_ramp_enabled").as_bool();
+        bfs_rail_ramp_rate_ =
+            std::max(0.0, this->get_parameter("bfs_rail_ramp_rate").as_double());
+        bfs_rail_ramp_slow_scale_ =
+            clampDouble(this->get_parameter("bfs_rail_ramp_slow_scale").as_double(), 0.0, 1.0);
+        bfs_attitude_gate_roll_ =
+            std::max(0.0, this->get_parameter("bfs_attitude_gate_roll").as_double());
+        bfs_attitude_gate_pitch_ =
+            std::max(0.0, this->get_parameter("bfs_attitude_gate_pitch").as_double());
+        bfs_attitude_gate_tilt_ =
+            std::max(0.0, this->get_parameter("bfs_attitude_gate_tilt").as_double());
+        bfs_attitude_gate_up_z_ =
+            clampDouble(this->get_parameter("bfs_attitude_gate_up_z").as_double(), -1.0, 1.0);
+        bfs_attitude_gate_angular_rate_ =
+            std::max(0.0, this->get_parameter("bfs_attitude_gate_angular_rate").as_double());
+        bfs_min_body_z_for_ramp_ =
+            std::max(0.0, this->get_parameter("bfs_min_body_z_for_ramp").as_double());
+        bfs_hard_fail_body_z_ =
+            std::max(0.0, this->get_parameter("bfs_hard_fail_body_z").as_double());
         if (mpc_controller_) {
             mpc_controller_->setFreezeCrossingRailTargets(crossing_freeze_rail_targets_);
+            mpc_controller_->setCrossingBfsRailGate(
+                bfs_rail_ramp_enabled_,
+                last_bfs_rail_freeze_,
+                last_bfs_rail_ramp_scale_,
+                bfs_rail_ramp_rate_);
         }
+    }
+
+    LevelAttitudeError computeLevelAttitudeErrorFromQuat(
+        const Eigen::Quaterniond& q_wb) const {
+        LevelAttitudeError out;
+        if (q_wb.norm() < 1e-6) {
+            return out;
+        }
+
+        const Eigen::Quaterniond q = q_wb.normalized();
+        const Eigen::Matrix3d R_wb = q.toRotationMatrix();
+        const Eigen::Vector3d body_z_w = R_wb.col(2);
+        const double up_z = clampDouble(body_z_w.z(), -1.0, 1.0);
+        const double lateral_norm =
+            std::sqrt(body_z_w.x() * body_z_w.x() +
+                      body_z_w.y() * body_z_w.y());
+
+        out.body_up_z = up_z;
+        out.tilt = std::atan2(lateral_norm, up_z);
+        const double denom = std::max(0.15, std::abs(up_z));
+        out.roll_like = std::atan2(-body_z_w.y(), denom);
+        out.pitch_like = std::atan2(body_z_w.x(), denom);
+        out.inverted = up_z < 0.2;
+        out.valid = true;
+        return out;
+    }
+
+    void updateBfsRailGate() {
+        if (!mpc_controller_) {
+            return;
+        }
+
+        const LevelAttitudeError level_err =
+            current_body_q_valid_
+                ? computeLevelAttitudeErrorFromQuat(current_body_q_wb_)
+                : LevelAttitudeError{};
+        if (level_err.valid) {
+            last_level_roll_like_ = level_err.roll_like;
+            last_level_pitch_like_ = level_err.pitch_like;
+            last_level_tilt_ = level_err.tilt;
+            last_body_up_z_ = level_err.body_up_z;
+            mpc_controller_->setLevelAttitudeState(
+                true,
+                level_err.roll_like,
+                level_err.pitch_like,
+                level_err.tilt,
+                level_err.body_up_z);
+        } else {
+            mpc_controller_->setLevelAttitudeState(false, 0.0, 0.0, 0.0, 1.0);
+        }
+
+        bool freeze = false;
+        double ramp_scale = 1.0;
+
+        if (!bfs_rail_ramp_enabled_ ||
+            current_mode_ != TrajectoryGenerator::Mode::CROSSING ||
+            !mpc_controller_->isCrossingEnabled()) {
+            last_bfs_rail_freeze_ = false;
+            last_bfs_rail_ramp_scale_ = 1.0;
+            mpc_controller_->setCrossingBfsRailGate(
+                bfs_rail_ramp_enabled_, false, 1.0, bfs_rail_ramp_rate_);
+            return;
+        }
+
+        const auto stage = mpc_controller_->getCurrentCrossingState();
+        if (stage != CrossingStateMachine::CrossingState::BODY_FORWARD_SHIFT) {
+            last_bfs_rail_freeze_ = false;
+            last_bfs_rail_ramp_scale_ = 1.0;
+            mpc_controller_->setCrossingBfsRailGate(
+                bfs_rail_ramp_enabled_, false, 1.0, bfs_rail_ramp_rate_);
+            return;
+        }
+
+        const double wx = current_srbd_state_.size() > 10 ? current_srbd_state_(9) : 0.0;
+        const double wy = current_srbd_state_.size() > 10 ? current_srbd_state_(10) : 0.0;
+        const double body_z = current_srbd_state_.size() > 2 ? current_srbd_state_(2) : 0.0;
+
+        if (!level_err.valid || bfs_rail_ramp_rate_ <= 0.0) {
+            freeze = true;
+            ramp_scale = 0.0;
+        } else {
+            const bool attitude_bad =
+                std::abs(level_err.roll_like) > bfs_attitude_gate_roll_ ||
+                std::abs(level_err.pitch_like) > bfs_attitude_gate_pitch_ ||
+                level_err.tilt > bfs_attitude_gate_tilt_ ||
+                level_err.body_up_z < bfs_attitude_gate_up_z_ ||
+                std::abs(wx) > bfs_attitude_gate_angular_rate_ ||
+                std::abs(wy) > bfs_attitude_gate_angular_rate_ ||
+                level_err.inverted;
+            const bool height_bad = body_z < bfs_min_body_z_for_ramp_;
+            freeze = attitude_bad || height_bad;
+            ramp_scale = freeze ? 0.0 : 1.0;
+            if (!freeze && level_err.tilt > 0.25) {
+                ramp_scale = bfs_rail_ramp_slow_scale_;
+            }
+        }
+
+        if (body_z < bfs_hard_fail_body_z_) {
+            freeze = true;
+            ramp_scale = 0.0;
+        }
+
+        last_bfs_rail_freeze_ = freeze;
+        last_bfs_rail_ramp_scale_ = ramp_scale;
+        mpc_controller_->setCrossingBfsRailGate(
+            bfs_rail_ramp_enabled_, freeze, ramp_scale, bfs_rail_ramp_rate_);
+
+        RCLCPP_INFO_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            500,
+            "[BFS rail_gate] freeze=%d ramp_scale=%.2f roll_like=%.3f pitch_like=%.3f tilt=%.3f up_z=%.3f z=%.3f wx=%.3f wy=%.3f",
+            freeze ? 1 : 0,
+            ramp_scale,
+            level_err.roll_like,
+            level_err.pitch_like,
+            level_err.tilt,
+            level_err.body_up_z,
+            body_z,
+            wx,
+            wy);
     }
 
     bool isCrossingSupportStabilizationActive(bool crossing_pre_approach) const {
@@ -727,6 +1004,24 @@ private:
         }
     }
 
+    void applyHoverForceSanitizer(Eigen::VectorXd& foot_forces) const {
+        if (!hover_force_sanitize_enabled_ ||
+            current_mode_ != TrajectoryGenerator::Mode::HOVER ||
+            foot_forces.size() < 12) {
+            return;
+        }
+
+        for (int leg = 0; leg < 4; ++leg) {
+            const int base = leg * 3;
+            foot_forces(base + 0) = 0.0;
+            foot_forces(base + 1) = 0.0;
+            foot_forces(base + 2) = clampDouble(
+                foot_forces(base + 2),
+                hover_force_min_leg_fz_,
+                hover_force_max_leg_fz_);
+        }
+    }
+
     void applyAttitudeSupport(Eigen::VectorXd& foot_forces,
                               const ContactDetector::ContactState& contact_state,
                               bool use_contact_mask,
@@ -747,38 +1042,89 @@ private:
             support_legs[i] = !use_contact_mask || contact_state.in_contact[i];
         }
 
-        const int front_support =
-            static_cast<int>(support_legs[0]) + static_cast<int>(support_legs[3]);
-        const int rear_support =
-            static_cast<int>(support_legs[1]) + static_cast<int>(support_legs[2]);
-        const int left_support =
-            static_cast<int>(support_legs[0]) + static_cast<int>(support_legs[1]);
-        const int right_support =
-            static_cast<int>(support_legs[2]) + static_cast<int>(support_legs[3]);
+        if (!current_body_q_valid_) {
+            return;
+        }
 
-        const double roll = current_srbd_state_(3);
-        const double pitch = current_srbd_state_(4);
+        const LevelAttitudeError level_err =
+            computeLevelAttitudeErrorFromQuat(current_body_q_wb_);
+        if (!level_err.valid) {
+            return;
+        }
+
+        last_level_roll_like_ = level_err.roll_like;
+        last_level_pitch_like_ = level_err.pitch_like;
+        last_level_tilt_ = level_err.tilt;
+        last_body_up_z_ = level_err.body_up_z;
+        if (level_err.inverted) {
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(),
+                *this->get_clock(),
+                1000,
+                "Attitude support skipped: body appears inverted/up_z=%.3f tilt=%.3f",
+                level_err.body_up_z,
+                level_err.tilt);
+            return;
+        }
+
         const double roll_rate = current_srbd_state_(9);
         const double pitch_rate = current_srbd_state_(10);
 
-        last_roll_error_ = attitude_support_roll_target_ - roll;
-        last_pitch_error_ = attitude_support_pitch_target_ - pitch;
+        last_roll_error_ = attitude_support_roll_target_ - level_err.roll_like;
+        last_pitch_error_ = attitude_support_pitch_target_ - level_err.pitch_like;
 
-        const double roll_delta = std::max(
-            -attitude_support_max_leg_delta_,
-            std::min(attitude_support_max_leg_delta_,
-                     attitude_support_roll_kp_ * last_roll_error_ -
-                         attitude_support_roll_kd_ * roll_rate));
-        const double pitch_delta = std::max(
-            -attitude_support_max_leg_delta_,
-            std::min(attitude_support_max_leg_delta_,
-                     attitude_support_pitch_kp_ * last_pitch_error_ -
-                         attitude_support_pitch_kd_ * pitch_rate));
+        double tau_roll =
+            attitude_support_roll_kp_ * last_roll_error_ -
+            attitude_support_roll_kd_ * roll_rate;
+        double tau_pitch =
+            attitude_support_pitch_kp_ * last_pitch_error_ -
+            attitude_support_pitch_kd_ * pitch_rate;
+        tau_roll = clampDouble(tau_roll, -40.0, 40.0);
+        tau_pitch = clampDouble(tau_pitch, -45.0, 45.0);
 
-        auto add_delta = [&](int leg, double delta) {
-            if (!support_legs[leg]) {
-                return;
+        Eigen::MatrixXd foot_rel = base_foot_positions_;
+
+        double denom_y = 1e-6;
+        double denom_x = 1e-6;
+        int support_count = 0;
+        for (int i = 0; i < 4; ++i) {
+            if (!support_legs[i]) {
+                continue;
             }
+            denom_y += foot_rel(i, 1) * foot_rel(i, 1);
+            denom_x += foot_rel(i, 0) * foot_rel(i, 0);
+            ++support_count;
+        }
+        if (support_count < 2) {
+            return;
+        }
+
+        std::array<double, 4> dfz{};
+        double mean_dfz = 0.0;
+        for (int leg = 0; leg < 4; ++leg) {
+            if (!support_legs[leg]) {
+                continue;
+            }
+            const double x = foot_rel(leg, 0);
+            const double y = foot_rel(leg, 1);
+            double d = tau_roll * y / denom_y - tau_pitch * x / denom_x;
+            d = clampDouble(
+                d,
+                -attitude_support_max_leg_delta_,
+                attitude_support_max_leg_delta_);
+            dfz[leg] = d;
+            mean_dfz += d;
+        }
+        mean_dfz /= static_cast<double>(support_count);
+
+        for (int leg = 0; leg < 4; ++leg) {
+            if (!support_legs[leg]) {
+                continue;
+            }
+            const double delta = clampDouble(
+                dfz[leg] - mean_dfz,
+                -attitude_support_max_leg_delta_,
+                attitude_support_max_leg_delta_);
             const int z_index = leg * 3 + 2;
             const double updated_force = std::max(
                 0.0,
@@ -786,32 +1132,34 @@ private:
                          foot_forces(z_index) + delta));
             last_attitude_support_delta_(leg) += updated_force - foot_forces(z_index);
             foot_forces(z_index) = updated_force;
-        };
-
-        if (front_support > 0 && rear_support > 0) {
-            const double front_share = pitch_delta / static_cast<double>(front_support);
-            const double rear_share = -pitch_delta / static_cast<double>(rear_support);
-            add_delta(0, front_share);
-            add_delta(3, front_share);
-            add_delta(1, rear_share);
-            add_delta(2, rear_share);
         }
 
-        if (left_support > 0 && right_support > 0) {
-            const double left_share = -roll_delta / static_cast<double>(left_support);
-            const double right_share = roll_delta / static_cast<double>(right_support);
-            add_delta(0, left_share);
-            add_delta(1, left_share);
-            add_delta(2, right_share);
-            add_delta(3, right_share);
-        }
+        RCLCPP_DEBUG_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            500,
+            "[attitude_support] roll_like=%.3f pitch_like=%.3f tilt=%.3f up_z=%.3f tau=[%.2f,%.2f] dfz=[%.1f,%.1f,%.1f,%.1f]",
+            level_err.roll_like,
+            level_err.pitch_like,
+            level_err.tilt,
+            level_err.body_up_z,
+            tau_roll,
+            tau_pitch,
+            last_attitude_support_delta_(0),
+            last_attitude_support_delta_(1),
+            last_attitude_support_delta_(2),
+            last_attitude_support_delta_(3));
     }
 
     void applyCrossingForwardAssist(Eigen::VectorXd& foot_forces,
                                     const ContactDetector::ContactState& contact_state,
                                     bool use_contact_mask,
-                                    bool crossing_pre_approach) const {
+                                    bool crossing_pre_approach) {
         if (!crossing_forward_assist_enabled_ || foot_forces.size() < 12) {
+            return;
+        }
+
+        if (crossing_pre_approach && !crossing_forward_assist_pre_approach_enabled_) {
             return;
         }
 
@@ -826,6 +1174,26 @@ private:
         }
 
         if (!active) {
+            return;
+        }
+
+        const LevelAttitudeError level_err =
+            current_body_q_valid_
+                ? computeLevelAttitudeErrorFromQuat(current_body_q_wb_)
+                : LevelAttitudeError{};
+        if (!level_err.valid ||
+            std::abs(level_err.roll_like) > 0.30 ||
+            std::abs(level_err.pitch_like) > 0.25 ||
+            level_err.tilt > 0.40 ||
+            level_err.body_up_z < 0.85 ||
+            level_err.inverted) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                 "Crossing forward assist gated by level attitude: valid=%d roll=%.3f pitch=%.3f tilt=%.3f up_z=%.3f",
+                                 level_err.valid ? 1 : 0,
+                                 level_err.roll_like,
+                                 level_err.pitch_like,
+                                 level_err.tilt,
+                                 level_err.body_up_z);
             return;
         }
 
@@ -878,12 +1246,30 @@ private:
         robot_state.sliding_velocities = current_sliding_velocities_;
 
         for (int i = 0; i < 4; ++i) {
-            robot_state.leg_configs[i] = CrossingStateMachine::LegConfiguration::ELBOW;
-            robot_state.foot_contacts[i] = true;
-            robot_state.foot_positions[i] = robot_state.position;
-            if (base_foot_positions_.rows() == 4 && base_foot_positions_.cols() == 3) {
-                robot_state.foot_positions[i] += base_foot_positions_.row(i).transpose();
-                robot_state.foot_positions[i].x() += robot_state.sliding_positions(i);
+            if (joint_received_) {
+                // Infer ELBOW vs KNEE config from true joint state (knee angle)
+                // Negative knee angle corresponds to ELBOW configuration
+                bool is_elbow = current_joint_angles_[i](2) < 0.0;
+                robot_state.leg_configs[i] = is_elbow ? 
+                    CrossingStateMachine::LegConfiguration::ELBOW : 
+                    CrossingStateMachine::LegConfiguration::KNEE;
+                    
+                robot_state.foot_contacts[i] = true;
+                
+                // Keep expectation-based foot positions for MPC SRBD stability
+                robot_state.foot_positions[i] = robot_state.position;
+                if (base_foot_positions_.rows() == 4 && base_foot_positions_.cols() == 3) {
+                    robot_state.foot_positions[i] += base_foot_positions_.row(i).transpose();
+                    robot_state.foot_positions[i].x() += robot_state.sliding_positions(i);
+                }
+            } else {
+                robot_state.leg_configs[i] = CrossingStateMachine::LegConfiguration::ELBOW;
+                robot_state.foot_contacts[i] = true;
+                robot_state.foot_positions[i] = robot_state.position;
+                if (base_foot_positions_.rows() == 4 && base_foot_positions_.cols() == 3) {
+                    robot_state.foot_positions[i] += base_foot_positions_.row(i).transpose();
+                    robot_state.foot_positions[i].x() += robot_state.sliding_positions(i);
+                }
             }
         }
 
@@ -943,7 +1329,23 @@ private:
         }
     }
     
-    // 参数
+    int getLegIdFromName(const std::string& name) const {
+        if (name.find("lf_") != std::string::npos ||
+            name.find("j1") != std::string::npos || name.find("leg1") != std::string::npos) {
+            return 0;
+        } else if (name.find("lh_") != std::string::npos ||
+                   name.find("j2") != std::string::npos || name.find("leg2") != std::string::npos) {
+            return 1;
+        } else if (name.find("rh_") != std::string::npos ||
+                   name.find("j3") != std::string::npos || name.find("leg3") != std::string::npos) {
+            return 2;
+        } else if (name.find("rf_") != std::string::npos ||
+                   name.find("j4") != std::string::npos || name.find("leg4") != std::string::npos) {
+            return 3;
+        }
+        return -1;
+    }
+
     double mass_;
     int horizon_;
     double dt_;
@@ -962,6 +1364,9 @@ private:
     double vertical_support_min_total_force_multiplier_;
     double vertical_support_max_leg_force_;
     double vertical_support_height_error_limit_;
+    bool hover_force_sanitize_enabled_ = true;
+    double hover_force_max_leg_fz_ = 55.0;
+    double hover_force_min_leg_fz_ = 18.0;
     bool attitude_support_enabled_;
     double attitude_support_roll_target_;
     double attitude_support_pitch_target_;
@@ -972,8 +1377,19 @@ private:
     double attitude_support_max_leg_delta_;
     bool crossing_forward_assist_enabled_;
     double crossing_forward_assist_force_per_leg_;
+    bool crossing_forward_assist_pre_approach_enabled_ = false;
     bool crossing_force_full_support_ = false;
     bool crossing_freeze_rail_targets_ = false;
+    bool bfs_rail_ramp_enabled_ = true;
+    double bfs_rail_ramp_rate_ = 0.015;
+    double bfs_rail_ramp_slow_scale_ = 0.25;
+    double bfs_attitude_gate_roll_ = 0.30;
+    double bfs_attitude_gate_pitch_ = 0.25;
+    double bfs_attitude_gate_tilt_ = 0.40;
+    double bfs_attitude_gate_up_z_ = 0.85;
+    double bfs_attitude_gate_angular_rate_ = 1.20;
+    double bfs_min_body_z_for_ramp_ = 0.080;
+    double bfs_hard_fail_body_z_ = 0.055;
     
     // 控制器
     std::unique_ptr<MPCController> mpc_controller_;
@@ -991,17 +1407,28 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
     
     // 状态
+    std::array<Eigen::Vector3d, 4> current_joint_angles_{};
     Eigen::VectorXd current_srbd_state_;
     Eigen::Vector4d current_sliding_positions_;
     Eigen::Vector4d current_sliding_velocities_ = Eigen::Vector4d::Zero();
     Eigen::Vector4d last_attitude_support_delta_ = Eigen::Vector4d::Zero();
     Eigen::Vector3d velocity_cmd_ = Eigen::Vector3d::Zero();
     Eigen::MatrixXd base_foot_positions_ = Eigen::MatrixXd::Zero(4, 3);
+    Eigen::Quaterniond current_body_q_wb_{1.0, 0.0, 0.0, 0.0};
     bool odom_received_ = false;
     bool joint_received_ = false;
+    std::array<bool, 4> leg_joint_received_{false, false, false, false};
+    bool measured_leg_configs_valid_ = false;
+    bool current_body_q_valid_ = false;
     int control_count_ = 0;
     double last_roll_error_ = 0.0;
     double last_pitch_error_ = 0.0;
+    double last_level_roll_like_ = 0.0;
+    double last_level_pitch_like_ = 0.0;
+    double last_level_tilt_ = 0.0;
+    double last_body_up_z_ = 1.0;
+    bool last_bfs_rail_freeze_ = false;
+    double last_bfs_rail_ramp_scale_ = 1.0;
     
     // 模式
     TrajectoryGenerator::Mode current_mode_;

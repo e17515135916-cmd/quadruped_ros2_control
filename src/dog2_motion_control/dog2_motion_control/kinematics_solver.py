@@ -304,7 +304,11 @@ class KinematicsSolver:
             return None
 
         if rail_offset is not None:
-            rail_candidates = [float(np.clip(rail_offset, rail_min, rail_max))]
+            requested_rail = float(rail_offset)
+            rail_limit_tolerance = 1e-9
+            if requested_rail < rail_min - rail_limit_tolerance or requested_rail > rail_max + rail_limit_tolerance:
+                return None
+            rail_candidates = [float(np.clip(requested_rail, rail_min, rail_max))]
         else:
             rail_candidates = np.linspace(rail_min, rail_max, self._rail_candidates).tolist()
             if leg_id in self._last_solution:

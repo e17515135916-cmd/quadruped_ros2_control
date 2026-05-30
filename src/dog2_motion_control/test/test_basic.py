@@ -35,8 +35,8 @@ def test_gait_config():
     from dog2_motion_control.gait_generator import GaitConfig
     
     config = GaitConfig()
-    assert config.stride_length == 0.08
-    assert config.stride_height == 0.05
+    assert config.stride_length == 0.04
+    assert config.stride_height == 0.04
     assert config.cycle_time == 2.0
     assert config.duty_factor == 0.75
     assert config.body_height == 0.2

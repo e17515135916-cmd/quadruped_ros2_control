@@ -68,7 +68,7 @@ class RailLockingTest(unittest.TestCase):
         # 记录导轨位置
         rail_positions = {}
         for i, name in enumerate(msg.name):
-            if 'j1' in name:  # 导轨关节
+            if name.endswith('_rail_joint') or name in {'j1', 'j2', 'j3', 'j4'}:
                 rail_positions[name] = msg.position[i]
         
         if rail_positions:
@@ -87,7 +87,7 @@ class RailLockingTest(unittest.TestCase):
         while self.joint_states is None:
             self._spin_once()
             if time.time() - start_time > timeout:
-                return False
+                self.skipTest("需要已运行的 Gazebo/控制器发布 /joint_states")
         return True
     
     def _get_rail_positions(self):
@@ -97,7 +97,7 @@ class RailLockingTest(unittest.TestCase):
         
         rail_positions = {}
         for i, name in enumerate(self.joint_states.name):
-            if 'j1' in name:  # 导轨关节
+            if name.endswith('_rail_joint') or name in {'j1', 'j2', 'j3', 'j4'}:
                 rail_positions[name] = self.joint_states.position[i]
         
         return rail_positions if rail_positions else None
@@ -389,7 +389,7 @@ class RailLockingTest(unittest.TestCase):
         for sample in self.rail_positions_history:
             all_rails.update(sample['positions'].keys())
         
-        expected_rails = {'leg1_j1', 'leg2_j1', 'leg3_j1', 'leg4_j1'}
+        expected_rails = {'lf_rail_joint', 'lh_rail_joint', 'rh_rail_joint', 'rf_rail_joint'}
         self.assertEqual(
             all_rails, expected_rails,
             f"未监控到所有导轨。期望: {expected_rails}, 实际: {all_rails}"

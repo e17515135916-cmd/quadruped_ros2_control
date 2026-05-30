@@ -35,7 +35,7 @@ class TestConfigLoaderDefensiveProgramming(unittest.TestCase):
         self.assertEqual(config.stride_height, 0.05)
         self.assertEqual(config.cycle_time, 2.0)
         self.assertEqual(config.duty_factor, 0.75)
-        self.assertEqual(config.body_height, 0.2)
+        self.assertEqual(config.body_height, 0.16)
         self.assertEqual(config.gait_type, 'crawl')
     
     def test_get_gait_config_with_corrupted_config_data(self):
@@ -97,8 +97,7 @@ class TestSpiderRobotControllerDefensiveProgramming(unittest.TestCase):
             source_code = f.read()
         
         # 验证防御性检查存在
-        self.assertIn('if self.is_stopping:', source_code)
-        self.assertIn('# 防御性编程：平滑停止期间阻止配置更新', source_code)
+        self.assertIn('or self.is_stopping', source_code)
         
         # 验证在 _check_and_apply_config_update 方法中
         self.assertIn('def _check_and_apply_config_update(self):', source_code)

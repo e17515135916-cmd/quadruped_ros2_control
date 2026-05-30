@@ -56,6 +56,11 @@ public:
         Eigen::Vector3d velocity;           ///< 质心速度 [vx, vy, vz]
         Eigen::Vector3d orientation;        ///< 姿态角 [roll, pitch, yaw]
         Eigen::Vector3d angular_velocity;   ///< 角速度 [wx, wy, wz]
+        double level_roll = 0.0;            ///< gravity-vector roll proxy
+        double level_pitch = 0.0;           ///< gravity-vector pitch proxy
+        double level_tilt = 0.0;            ///< body +Z tilt from world +Z
+        double body_up_z = 1.0;             ///< body +Z dot world +Z
+        bool level_attitude_valid = false;  ///< gravity-vector attitude is available
         
         // 滑动副状态 (4个腿的滑动副位移)
         Eigen::Vector4d sliding_positions;  ///< [d1, d2, d3, d4]
@@ -160,6 +165,23 @@ public:
         double min_leg_distance = 0.15; ///< 腿间最小距离 (m)
     };
 
+    struct StageStabilityMetrics {
+        double roll_abs = 0.0;
+        double pitch_abs = 0.0;
+        double yaw_rate_abs = 0.0;
+        double body_z = 0.0;
+        double level_tilt = 0.0;
+        double body_up_z = 1.0;
+        double support_margin = -1e9;
+        double rail_tracking_error = 0.0;
+        int contact_count = 0;
+        bool rail_tracking_ok = false;
+        bool support_ok = false;
+        bool contacts_ok = false;
+        bool level_attitude_valid = false;
+        bool attitude_ok = false;
+    };
+
     StageConstraints getCurrentConstraints() const;
 
     /**
@@ -170,6 +192,7 @@ public:
      * @return false 不能进入下一状态
      */
     bool canTransitionToNext(const RobotState& current_state) const;
+    StageStabilityMetrics computeStageStabilityMetrics(const RobotState& current_state) const;
 
     /**
      * @brief 强制转换到指定状态（调试用）
@@ -236,13 +259,22 @@ private:
     /**
      * @brief rail 跟踪 guard 阈值（2mm）
      */
-    double rail_tracking_error_threshold_ = 0.005;  ///< m
+    double rail_tracking_error_threshold_ = 0.020;  ///< m
 
     /**
      * @brief support polygon guard 阈值（1.5cm）
      * 以 x 方向 1D 支撑区间近似计算 margin
      */
     double support_polygon_margin_threshold_ = 0.015;  ///< m
+    double max_roll_for_transit_ = 0.35;               ///< rad
+    double max_pitch_for_transit_ = 0.35;              ///< rad
+    double max_yaw_rate_for_transit_ = 0.40;           ///< rad/s
+    double min_body_z_for_transit_ = 0.08;             ///< m
+    double max_body_z_for_transit_ = 0.45;             ///< m
+    double max_level_tilt_for_transit_ = 0.40;         ///< rad
+    double min_body_up_z_for_transit_ = 0.85;          ///< body +Z dot world +Z
+    mutable std::string last_transition_block_reason_;
+    mutable double last_transition_block_log_time_ = -1.0;
 
     /**
      * @brief 计算 rail 跟踪误差（最大逐腿偏差）
@@ -253,6 +285,13 @@ private:
      * @brief 计算 support polygon margin（x 方向 1D 近似）
      */
     double computeSupportPolygonMargin(const RobotState& state) const;
+    bool isStableForTransit(const StageStabilityMetrics& metrics) const;
+    std::string getTransitionBlockReason(const RobotState& state,
+                                         bool progress_ok,
+                                         const StageStabilityMetrics& metrics) const;
+    void logTransitionHoldReason(const RobotState& state,
+                                 bool progress_ok,
+                                 const StageStabilityMetrics& metrics) const;
     
     /**
      * @brief 状态转换逻辑

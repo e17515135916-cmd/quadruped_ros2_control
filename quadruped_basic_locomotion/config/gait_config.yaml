@@ -1,0 +1,38 @@
+gait:
+  type: "trot"
+  period: 1.5
+  duty_factor: 0.94
+  initial_stand_time: 2.0
+  transition_duration: 1.00
+  phase_offset:
+    FL: 0.0
+    RR: 0.0
+    FR: 0.5
+    RL: 0.5
+  min_stance_legs: 2
+
+swing_trajectory:
+  type: "cycloid"
+  step_height: 0.008
+  max_step_height: 0.02
+  max_step_length: 0.025
+  max_position_delta_per_cycle: 0.006
+
+stance:
+  foot_slip_warning_m: 0.01
+
+desired_velocity:
+  vx: 0.030
+  vy: 0.0
+  yaw_rate: 0.0
+
+raibert:
+  enabled: true
+  k_velocity_x: 0.50
+  k_velocity_y: 0.10
+  velocity_error_sign: 1
+  max_step_length_x: 0.025
+  max_step_length_y: 0.010
+  max_foot_target_change_per_cycle: 0.008
+  use_yaw_correction: false
+  k_yaw: 0.02

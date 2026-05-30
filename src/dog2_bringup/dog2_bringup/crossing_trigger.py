@@ -25,6 +25,10 @@ class CrossingTrigger(Node):
         self.declare_parameter("odom_topic", "/dog2/state_estimation/odom")
         self.declare_parameter("joint_state_topic", "/joint_states")
         self.declare_parameter("ready_freshness_sec", 1.0)
+        self.declare_parameter("stable_after_ready_sec", 2.0)
+        self.declare_parameter("min_body_z_for_trigger", 0.12)
+        self.declare_parameter("max_level_tilt_for_trigger", 0.55)
+        self.declare_parameter("min_body_up_z_for_trigger", 0.85)
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
         self.declare_parameter("approach_cmd_vel_x", 0.0)
         self.declare_parameter("approach_cmd_vel_y", 0.0)
@@ -51,13 +55,30 @@ class CrossingTrigger(Node):
         self._ready_freshness_sec = max(
             0.1, float(self.get_parameter("ready_freshness_sec").value)
         )
+        self._stable_after_ready_sec = max(
+            0.0, float(self.get_parameter("stable_after_ready_sec").value)
+        )
+        self._min_body_z_for_trigger = float(
+            self.get_parameter("min_body_z_for_trigger").value
+        )
+        self._max_level_tilt_for_trigger = max(
+            0.0, float(self.get_parameter("max_level_tilt_for_trigger").value)
+        )
+        self._min_body_up_z_for_trigger = float(
+            self.get_parameter("min_body_up_z_for_trigger").value
+        )
         self._publisher = self.create_publisher(Bool, self._topic, 1)
         self._cmd_vel_pub = self.create_publisher(Twist, self._cmd_vel_topic, 1)
         self._fired = False
+        self._approach_active = False
         self._started_ns = int(self.get_clock().now().nanoseconds)
         self._last_odom_ns: Optional[int] = None
         self._last_joint_state_ns: Optional[int] = None
         self._latest_odom_x: Optional[float] = None
+        self._latest_odom_z: Optional[float] = None
+        self._latest_level_tilt: Optional[float] = None
+        self._latest_body_up_z: Optional[float] = None
+        self._stable_since_ns: Optional[int] = None
         self._last_wait_log_ns = 0
         if self._wait_for_stack_ready or math.isfinite(self._trigger_when_x_ge):
             self._odom_sub = self.create_subscription(
@@ -75,7 +96,8 @@ class CrossingTrigger(Node):
 
         self.get_logger().info(
             "crossing_trigger ready: enabled=%s topic='%s' delay=%.2fs wait_for_stack_ready=%s "
-            "odom='%s' joint_states='%s' approach_cmd_vel=[%.3f, %.3f, %.3f] trigger_when_x_ge=%s"
+            "odom='%s' joint_states='%s' approach_cmd_vel=[%.3f, %.3f, %.3f] trigger_when_x_ge=%s "
+            "stable_after_ready=%.2fs min_z=%.3f max_tilt=%.3f min_up_z=%.3f"
             % (
                 self._enabled,
                 self._topic,
@@ -87,6 +109,10 @@ class CrossingTrigger(Node):
                 self._approach_cmd_vel_y,
                 self._approach_cmd_vel_yaw,
                 self._format_optional_float(self._trigger_when_x_ge),
+                self._stable_after_ready_sec,
+                self._min_body_z_for_trigger,
+                self._max_level_tilt_for_trigger,
+                self._min_body_up_z_for_trigger,
             )
         )
 
@@ -96,6 +122,15 @@ class CrossingTrigger(Node):
     def _on_odom(self, msg: Odometry) -> None:
         self._last_odom_ns = int(self.get_clock().now().nanoseconds)
         self._latest_odom_x = float(msg.pose.pose.position.x)
+        self._latest_odom_z = float(msg.pose.pose.position.z)
+        tilt, up_z = self._level_from_quat(
+            float(msg.pose.pose.orientation.x),
+            float(msg.pose.pose.orientation.y),
+            float(msg.pose.pose.orientation.z),
+            float(msg.pose.pose.orientation.w),
+        )
+        self._latest_level_tilt = tilt
+        self._latest_body_up_z = up_z
 
     def _on_joint_state(self, _: JointState) -> None:
         self._last_joint_state_ns = int(self.get_clock().now().nanoseconds)
@@ -111,6 +146,33 @@ class CrossingTrigger(Node):
             and self._last_joint_state_ns is not None
             and (now_ns - self._last_odom_ns) <= freshness_ns
             and (now_ns - self._last_joint_state_ns) <= freshness_ns
+        )
+
+    def _is_instantly_stable_for_trigger(self) -> bool:
+        if (
+            self._latest_odom_z is None
+            or self._latest_level_tilt is None
+            or self._latest_body_up_z is None
+            or not math.isfinite(self._latest_level_tilt)
+            or not math.isfinite(self._latest_body_up_z)
+        ):
+            return False
+        return (
+            self._latest_odom_z >= self._min_body_z_for_trigger
+            and self._latest_level_tilt <= self._max_level_tilt_for_trigger
+            and self._latest_body_up_z >= self._min_body_up_z_for_trigger
+        )
+
+    def _is_stably_ready_for_trigger(self) -> bool:
+        now_ns = int(self.get_clock().now().nanoseconds)
+        if not self._is_instantly_stable_for_trigger():
+            self._stable_since_ns = None
+            return False
+        if self._stable_since_ns is None:
+            self._stable_since_ns = now_ns
+            return self._stable_after_ready_sec <= 0.0
+        return (now_ns - self._stable_since_ns) >= int(
+            self._stable_after_ready_sec * 1e9
         )
 
     def _is_trigger_pose_ready(self) -> bool:
@@ -134,12 +196,37 @@ class CrossingTrigger(Node):
         msg.linear.y = float(y)
         msg.angular.z = float(yaw)
         self._cmd_vel_pub.publish(msg)
+        self._approach_active = self._approach_enabled() and (
+            abs(x) > 1e-6 or abs(y) > 1e-6 or abs(yaw) > 1e-6
+        )
+
+    def _stop_approach_if_active(self) -> None:
+        if not self._approach_active:
+            return
+        self._publish_cmd_vel(0.0, 0.0, 0.0)
+        self._approach_active = False
 
     @staticmethod
     def _format_optional_float(value: Optional[float]) -> str:
         if value is None or not math.isfinite(value):
             return "none"
         return "%.3f" % value
+
+    @staticmethod
+    def _level_from_quat(x: float, y: float, z: float, w: float) -> tuple[float, float]:
+        norm = math.sqrt(x * x + y * y + z * z + w * w)
+        if norm < 1e-9:
+            return float("nan"), float("nan")
+        x /= norm
+        y /= norm
+        z /= norm
+        w /= norm
+        body_z_x = 2.0 * (x * z + w * y)
+        body_z_y = 2.0 * (y * z - w * x)
+        body_z_z = 1.0 - 2.0 * (x * x + y * y)
+        up_z = max(-1.0, min(1.0, body_z_z))
+        lateral_norm = math.sqrt(body_z_x * body_z_x + body_z_y * body_z_y)
+        return math.atan2(lateral_norm, up_z), up_z
 
     def _maybe_log_waiting(self) -> None:
         now_ns = int(self.get_clock().now().nanoseconds)
@@ -153,11 +240,16 @@ class CrossingTrigger(Node):
 
         self.get_logger().info(
             "Waiting for research stack readiness before crossing trigger: "
-            "odom_age=%s joint_state_age=%s odom_x=%s trigger_when_x_ge=%s"
+            "odom_age=%s joint_state_age=%s odom_x=%s odom_z=%s tilt=%s up_z=%s "
+            "stable_age=%s trigger_when_x_ge=%s"
             % (
                 _age_or_none(self._last_odom_ns),
                 _age_or_none(self._last_joint_state_ns),
                 self._format_optional_float(self._latest_odom_x),
+                self._format_optional_float(self._latest_odom_z),
+                self._format_optional_float(self._latest_level_tilt),
+                self._format_optional_float(self._latest_body_up_z),
+                _age_or_none(self._stable_since_ns),
                 self._format_optional_float(self._trigger_when_x_ge),
             )
         )
@@ -171,6 +263,13 @@ class CrossingTrigger(Node):
             return
 
         if not self._is_stack_ready():
+            self._stable_since_ns = None
+            self._stop_approach_if_active()
+            self._maybe_log_waiting()
+            return
+
+        if not self._is_stably_ready_for_trigger():
+            self._stop_approach_if_active()
             self._maybe_log_waiting()
             return
 

@@ -54,9 +54,14 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("crossing_window_top_height", default_value="0.62"),
             DeclareLaunchArgument("crossing_window_safety_margin", default_value="0.04"),
             DeclareLaunchArgument("crossing_activation_distance", default_value="0.25"),
-            DeclareLaunchArgument("crossing_approach_speed", default_value="0.15"),
-            DeclareLaunchArgument("crossing_force_full_support", default_value="false"),
+            DeclareLaunchArgument("crossing_approach_speed", default_value="0.05"),
+            DeclareLaunchArgument("crossing_force_full_support", default_value="true"),
             DeclareLaunchArgument("crossing_freeze_rail_targets", default_value="false"),
+            DeclareLaunchArgument("rail_hold_enabled", default_value="false"),
+            DeclareLaunchArgument("rail_hold_hover_enabled", default_value="false"),
+            DeclareLaunchArgument("rail_hold_crossing_staging_enabled", default_value="false"),
+            DeclareLaunchArgument("freeze_rail_effort_in_hover", default_value="false"),
+            DeclareLaunchArgument("freeze_rail_effort_in_crossing_staging", default_value="false"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     PathJoinSubstitution([FindPackageShare("dog2_bringup"), "launch", "sim_base.launch.py"])
@@ -102,6 +107,11 @@ def generate_launch_description() -> LaunchDescription:
                     "crossing_approach_speed": LaunchConfiguration("crossing_approach_speed"),
                     "crossing_force_full_support": LaunchConfiguration("crossing_force_full_support"),
                     "crossing_freeze_rail_targets": LaunchConfiguration("crossing_freeze_rail_targets"),
+                    "rail_hold_enabled": LaunchConfiguration("rail_hold_enabled"),
+                    "rail_hold_hover_enabled": LaunchConfiguration("rail_hold_hover_enabled"),
+                    "rail_hold_crossing_staging_enabled": LaunchConfiguration("rail_hold_crossing_staging_enabled"),
+                    "freeze_rail_effort_in_hover": LaunchConfiguration("freeze_rail_effort_in_hover"),
+                    "freeze_rail_effort_in_crossing_staging": LaunchConfiguration("freeze_rail_effort_in_crossing_staging"),
                 }.items(),
             ),
             IncludeLaunchDescription(

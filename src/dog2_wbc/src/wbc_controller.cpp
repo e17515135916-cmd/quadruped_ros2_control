@@ -1,6 +1,7 @@
 #include "dog2_wbc/wbc_controller.hpp"
 #include <cmath>
 #include <chrono>
+#include <iostream>
 
 namespace dog2_wbc {
 
@@ -232,8 +233,10 @@ void WBCController::applyTorqueLimits(Eigen::VectorXd& torques) {
     // 旋转关节力矩限制
     for (int i = 0; i < 12; ++i) {
         if (torques(i) > params_.max_torque) {
+            std::cout << "[WBCController] HARD CLAMP Joint " << i << " torque " << torques(i) << " -> " << params_.max_torque << std::endl;
             torques(i) = params_.max_torque;
         } else if (torques(i) < -params_.max_torque) {
+            std::cout << "[WBCController] HARD CLAMP Joint " << i << " torque " << torques(i) << " -> -" << params_.max_torque << std::endl;
             torques(i) = -params_.max_torque;
         }
     }
@@ -241,8 +244,10 @@ void WBCController::applyTorqueLimits(Eigen::VectorXd& torques) {
     // 滑动副力限制
     for (int i = 12; i < 16; ++i) {
         if (torques(i) > params_.max_sliding_force) {
+            std::cout << "[WBCController] HARD CLAMP Rail " << i-12 << " force " << torques(i) << " -> " << params_.max_sliding_force << std::endl;
             torques(i) = params_.max_sliding_force;
         } else if (torques(i) < -params_.max_sliding_force) {
+            std::cout << "[WBCController] HARD CLAMP Rail " << i-12 << " force " << torques(i) << " -> -" << params_.max_sliding_force << std::endl;
             torques(i) = -params_.max_sliding_force;
         }
     }

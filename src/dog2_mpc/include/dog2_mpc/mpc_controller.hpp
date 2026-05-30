@@ -110,6 +110,23 @@ public:
     void setFreezeCrossingRailTargets(bool freeze) {
         freeze_crossing_rail_targets_ = freeze;
     }
+
+    /**
+     * @brief 设置 BODY_FORWARD_SHIFT rail ramp/gate
+     */
+    void setCrossingBfsRailGate(bool enabled,
+                                bool freeze,
+                                double ramp_rate_scale,
+                                double ramp_rate);
+
+    /**
+     * @brief 设置 gravity-vector level attitude，用于 crossing 状态机姿态 gate
+     */
+    void setLevelAttitudeState(bool valid,
+                               double level_roll,
+                               double level_pitch,
+                               double level_tilt,
+                               double body_up_z);
     
     /**
      * @brief 求解MPC优化问题（16维扩展版本）
@@ -212,6 +229,15 @@ public:
      */
     bool isCrossingEnabled() const { return crossing_enabled_; }
 
+    /**
+     * @brief 设置真实腿部构型（从 joint state 估计）
+     * @param configs 四条腿的构型
+     * @param valid 测量值是否有效（所有四腿 tibia 均收到过 joint state）
+     */
+    void setMeasuredLegConfigurations(
+        const std::array<CrossingStateMachine::LegConfiguration, 4>& configs,
+        bool valid);
+
 private:
     /**
      * @brief 构建QP问题（16维扩展版本）
@@ -306,6 +332,23 @@ private:
 
     // crossing 诊断：冻结 rail 目标和 rail-stage 约束
     bool freeze_crossing_rail_targets_;
+    bool bfs_rail_ramp_enabled_;
+    bool bfs_rail_gate_freeze_;
+    double bfs_rail_ramp_rate_scale_;
+    double bfs_rail_ramp_rate_;
+    bool bfs_rail_ref_initialized_;
+    Eigen::Vector4d bfs_rail_ref_;
+    Eigen::Vector4d bfs_rail_start_;
+    CrossingStateMachine::CrossingState last_crossing_stage_;
+    bool level_attitude_valid_;
+    double level_roll_;
+    double level_pitch_;
+    double level_tilt_;
+    double body_up_z_;
+
+    // 真实腿部构型（从 joint state 注入，避免使用 stage 期望值掩盖问题）
+    std::array<CrossingStateMachine::LegConfiguration, 4> measured_leg_configs_;
+    bool measured_leg_configs_valid_ = false;
     
     // 参考轨迹（16维扩展状态）
     std::vector<Eigen::VectorXd> x_ref_;

@@ -41,9 +41,14 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("crossing_window_top_height", default_value="0.62"),
             DeclareLaunchArgument("crossing_window_safety_margin", default_value="0.04"),
             DeclareLaunchArgument("crossing_activation_distance", default_value="0.25"),
-            DeclareLaunchArgument("crossing_approach_speed", default_value="0.15"),
-            DeclareLaunchArgument("crossing_force_full_support", default_value="false"),
+            DeclareLaunchArgument("crossing_approach_speed", default_value="0.05"),
+            DeclareLaunchArgument("crossing_force_full_support", default_value="true"),
             DeclareLaunchArgument("crossing_freeze_rail_targets", default_value="false"),
+            DeclareLaunchArgument("rail_hold_enabled", default_value="false"),
+            DeclareLaunchArgument("rail_hold_hover_enabled", default_value="false"),
+            DeclareLaunchArgument("rail_hold_crossing_staging_enabled", default_value="false"),
+            DeclareLaunchArgument("freeze_rail_effort_in_hover", default_value="false"),
+            DeclareLaunchArgument("freeze_rail_effort_in_crossing_staging", default_value="false"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     PathJoinSubstitution(
@@ -140,6 +145,18 @@ def generate_launch_description() -> LaunchDescription:
                             LaunchConfiguration("crossing_freeze_rail_targets"),
                             value_type=bool,
                         ),
+                        "rail_hold_enabled": ParameterValue(
+                            LaunchConfiguration("rail_hold_enabled"),
+                            value_type=bool,
+                        ),
+                        "rail_hold_hover_enabled": ParameterValue(
+                            LaunchConfiguration("rail_hold_hover_enabled"),
+                            value_type=bool,
+                        ),
+                        "rail_hold_crossing_staging_enabled": ParameterValue(
+                            LaunchConfiguration("rail_hold_crossing_staging_enabled"),
+                            value_type=bool,
+                        ),
                     }
                 ],
                 remappings=[
@@ -191,6 +208,15 @@ def generate_launch_description() -> LaunchDescription:
                             LaunchConfiguration("crossing_freeze_rail_targets"),
                             value_type=bool,
                         ),
+                        "freeze_rail_effort_in_hover": ParameterValue(
+                            LaunchConfiguration("freeze_rail_effort_in_hover"),
+                            value_type=bool,
+                        ),
+                        "freeze_rail_effort_in_crossing_staging": ParameterValue(
+                            LaunchConfiguration("freeze_rail_effort_in_crossing_staging"),
+                            value_type=bool,
+                        ),
+                        "publish_safe_zero_on_stale": False,
                     }
                 ],
                 condition=IfCondition(

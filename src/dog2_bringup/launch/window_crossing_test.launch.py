@@ -20,7 +20,7 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description() -> LaunchDescription:
     cleanup_pattern = (
         "[d]og2_window_frame|window_frame[.]sdf|/world/[d]og2_window_frame|"
-        "[c]rossing_check|[c]rossing_trigger|[r]obot_state_publisher|"
+        "[d]og2_crossing_check|[/]dog2_bringup/lib/dog2_bringup/crossing_trigger|__node:=dog2_crossing_trigger|[r]obot_state_publisher|"
         "[g]z_pose_to_odom|[s]im_state_estimator_node[.]py|[g]ait_scheduler_node[.]py|"
         "[m]pc_node_complete|[w]bc_node_complete|[w]bc_effort_mux|"
         "[m]pc_debug_adapter|[w]bc_debug_adapter|[v]isualization_node|"
@@ -64,6 +64,7 @@ def generate_launch_description() -> LaunchDescription:
                     LaunchConfiguration("rail_motion_threshold_m"),
                     value_type=float,
                 ),
+                "mode": LaunchConfiguration("crossing_check_mode"),
                 "result_file": LaunchConfiguration("result_file"),
             }
         ],
@@ -105,6 +106,11 @@ def generate_launch_description() -> LaunchDescription:
             "crossing_approach_speed": LaunchConfiguration("crossing_approach_speed"),
             "crossing_force_full_support": LaunchConfiguration("crossing_force_full_support"),
             "crossing_freeze_rail_targets": LaunchConfiguration("crossing_freeze_rail_targets"),
+            "rail_hold_enabled": LaunchConfiguration("rail_hold_enabled"),
+            "rail_hold_hover_enabled": LaunchConfiguration("rail_hold_hover_enabled"),
+            "rail_hold_crossing_staging_enabled": LaunchConfiguration("rail_hold_crossing_staging_enabled"),
+            "freeze_rail_effort_in_hover": LaunchConfiguration("freeze_rail_effort_in_hover"),
+            "freeze_rail_effort_in_crossing_staging": LaunchConfiguration("freeze_rail_effort_in_crossing_staging"),
             "crossing_trigger_x_threshold": LaunchConfiguration("crossing_trigger_x_threshold"),
             "pre_crossing_cmd_vel_x": LaunchConfiguration("pre_crossing_cmd_vel_x"),
         }.items(),
@@ -119,6 +125,7 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("crossing_delay_sec", default_value="4.0"),
             DeclareLaunchArgument("spawn_delay_sec", default_value="8.0"),
             DeclareLaunchArgument("timeout_sec", default_value="150.0"),
+            DeclareLaunchArgument("crossing_check_mode", default_value="full"),
             DeclareLaunchArgument("body_pass_margin", default_value="0.10"),
             DeclareLaunchArgument("rail_motion_threshold_m", default_value="0.025"),
             DeclareLaunchArgument(
@@ -132,11 +139,16 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("crossing_window_top_height", default_value="0.62"),
             DeclareLaunchArgument("crossing_window_safety_margin", default_value="0.04"),
             DeclareLaunchArgument("crossing_activation_distance", default_value="0.75"),
-            DeclareLaunchArgument("crossing_approach_speed", default_value="0.15"),
+            DeclareLaunchArgument("crossing_approach_speed", default_value="0.05"),
             DeclareLaunchArgument("crossing_force_full_support", default_value="false"),
             DeclareLaunchArgument("crossing_freeze_rail_targets", default_value="false"),
-            DeclareLaunchArgument("crossing_trigger_x_threshold", default_value="0.35"),
-            DeclareLaunchArgument("pre_crossing_cmd_vel_x", default_value="0.12"),
+            DeclareLaunchArgument("rail_hold_enabled", default_value="false"),
+            DeclareLaunchArgument("rail_hold_hover_enabled", default_value="false"),
+            DeclareLaunchArgument("rail_hold_crossing_staging_enabled", default_value="false"),
+            DeclareLaunchArgument("freeze_rail_effort_in_hover", default_value="false"),
+            DeclareLaunchArgument("freeze_rail_effort_in_crossing_staging", default_value="false"),
+            DeclareLaunchArgument("crossing_trigger_x_threshold", default_value="-0.02"),
+            DeclareLaunchArgument("pre_crossing_cmd_vel_x", default_value="0.0"),
             SetEnvironmentVariable("ROS_DOMAIN_ID", LaunchConfiguration("ros_domain_id")),
             RegisterEventHandler(
                 OnProcessExit(

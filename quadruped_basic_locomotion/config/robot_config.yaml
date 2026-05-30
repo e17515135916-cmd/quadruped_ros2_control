@@ -6,6 +6,12 @@ robot:
   xacro_args:
     controllers_yaml: "../../src/dog2_description/config/ros2_controllers.yaml"
 
+simulation:
+  pybullet:
+    # The expanded URDF root needs this PyBullet world alignment so the
+    # semantic base_link Z axis is vertical in the GUI/dynamics world.
+    base_orientation_rpy: [1.57079632679, 0.0, 0.0]
+
 # This robot has one prismatic rail per leg in the current URDF.  Keep
 # joint_name for single-rail robots; use joint_names when multiple rails must be
 # locked independently.
@@ -37,7 +43,11 @@ legs:
       - 0.0
       - 0.0
     default_stand_q:
-      - 0.0
+      - -0.30
+      - 0.65
+      - -1.25
+    locomotion_stand_q:
+      - -1.15
       - -0.3
       - -0.6
     hip_frame:
@@ -49,12 +59,12 @@ legs:
       lower: [-2.618, -2.8, -2.8]
       upper: [2.618, 2.8, 2.8]
     torque_limit:
-      - 18.0
-      - 18.0
-      - 18.0
+      - 80.0
+      - 80.0
+      - 80.0
     pd_gain:
-      kp: [20.0, 20.0, 20.0]
-      kd: [0.8, 0.8, 0.8]
+      kp: [80.0, 80.0, 80.0]
+      kd: [2.0, 2.0, 2.0]
 
   FR:
     foot_link: "rf_foot_link"
@@ -71,7 +81,11 @@ legs:
       - 0.0
       - 0.0
     default_stand_q:
-      - 0.0
+      - 0.30
+      - 0.65
+      - -1.25
+    locomotion_stand_q:
+      - 1.15
       - -0.3
       - -0.6
     hip_frame:
@@ -83,12 +97,12 @@ legs:
       lower: [-2.618, -2.8, -2.8]
       upper: [2.618, 2.8, 2.8]
     torque_limit:
-      - 18.0
-      - 18.0
-      - 18.0
+      - 80.0
+      - 80.0
+      - 80.0
     pd_gain:
-      kp: [20.0, 20.0, 20.0]
-      kd: [0.8, 0.8, 0.8]
+      kp: [80.0, 80.0, 80.0]
+      kd: [2.0, 2.0, 2.0]
 
   RL:
     foot_link: "lh_foot_link"
@@ -105,7 +119,11 @@ legs:
       - 0.0
       - 0.0
     default_stand_q:
-      - 0.0
+      - -0.30
+      - 0.65
+      - -1.25
+    locomotion_stand_q:
+      - -1.15
       - -0.3
       - -0.6
     hip_frame:
@@ -117,12 +135,12 @@ legs:
       lower: [-2.618, -2.8, -2.8]
       upper: [2.618, 2.8, 2.8]
     torque_limit:
-      - 18.0
-      - 18.0
-      - 18.0
+      - 80.0
+      - 80.0
+      - 80.0
     pd_gain:
-      kp: [20.0, 20.0, 20.0]
-      kd: [0.8, 0.8, 0.8]
+      kp: [80.0, 80.0, 80.0]
+      kd: [2.0, 2.0, 2.0]
 
   RR:
     foot_link: "rh_foot_link"
@@ -139,7 +157,11 @@ legs:
       - 0.0
       - 0.0
     default_stand_q:
-      - 0.0
+      - 0.30
+      - 0.65
+      - -1.25
+    locomotion_stand_q:
+      - 1.15
       - -0.3
       - -0.6
     hip_frame:
@@ -151,9 +173,9 @@ legs:
       lower: [-2.618, -2.8, -2.8]
       upper: [2.618, 2.8, 2.8]
     torque_limit:
-      - 18.0
-      - 18.0
-      - 18.0
+      - 80.0
+      - 80.0
+      - 80.0
     pd_gain:
-      kp: [20.0, 20.0, 20.0]
-      kd: [0.8, 0.8, 0.8]
+      kp: [80.0, 80.0, 80.0]
+      kd: [2.0, 2.0, 2.0]

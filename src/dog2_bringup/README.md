@@ -39,10 +39,13 @@ Window-frame PASS/FAIL validation:
 Current crossing development commands:
 - build changed packages: `colcon build --packages-select dog2_mpc dog2_bringup --symlink-install --event-handlers console_direct+`
 - flat smoke regression: `ros2 launch dog2_bringup smoke_test.launch.py controller_mode:=effort research_stack:=true expect_research_stack:=true ros_domain_id:=93 result_file:=/tmp/dog2_smoke_result.txt`
-- window crossing validation: `ros2 launch dog2_bringup window_crossing_test.launch.py ros_domain_id:=91 timeout_sec:=150.0 result_file:=/tmp/dog2_window_crossing_result.txt`
-- key logs: `grep -E "PASS|FAIL|MPC:|状态转换|crossing" /tmp/dog2_window_*.log /tmp/dog2_smoke_*.log`
+- window crossing stage smoke: `ros2 launch dog2_bringup window_crossing_test.launch.py ros_domain_id:=91 crossing_check_mode:=stage_smoke timeout_sec:=170.0 result_file:=/tmp/dog2_window_crossing_result.txt`
+- window crossing full check: `ros2 launch dog2_bringup window_crossing_test.launch.py ros_domain_id:=92 crossing_check_mode:=full timeout_sec:=170.0 result_file:=/tmp/dog2_window_full_result.txt`
+- key logs: `grep -E "PASS|FAIL|APPROACH quasi-static|BFS guard|stage_gate|状态转换|crossing" /tmp/dog2_window_*.log /tmp/dog2_smoke_*.log`
 
 Current window-crossing status:
-- PASS currently means the trigger fired, the research stack stayed fresh, rails moved significantly, and odom reached the configured frame region.
+- `PASS_STAGE_SMOKE` means the trigger fired, the research stack stayed fresh, rails moved significantly, and odom reached the configured frame region.
+- `PASS_FULL` requires reaching the later crossing stages through recovery; this is not stable yet.
 - The current development boundary is `CROSSING:BODY_FORWARD_SHIFT`; rear-leg transit and recovery are still under stabilization.
+- Active `APPROACH` is quasi-static in `MPCController::generateCrossingReference()`. `crossing_trial.launch.py` and `window_crossing_test.launch.py` trigger crossing mode after the delay, while `mpc_node_complete` still controls the true activation distance internally.
 - Prefer a fresh `ros_domain_id` for each run. The test launches pre-clean common stale ROS/Gazebo processes, but stale domains can still make debugging ambiguous.
