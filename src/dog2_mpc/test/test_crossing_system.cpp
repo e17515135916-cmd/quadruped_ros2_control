@@ -1,10 +1,12 @@
 #include "dog2_mpc/crossing_state_machine.hpp"
 #include "dog2_mpc/hybrid_gait_generator.hpp"
 #include "dog2_mpc/mpc_controller.hpp"
+#include "test_helpers.hpp"
 #include <iostream>
 #include <iomanip>
 
 using namespace dog2_mpc;
+using namespace dog2_mpc::test;
 
 /**
  * @brief 测试Dog2越障系统的完整流程
@@ -40,6 +42,7 @@ int main() {
     
     // 3. 创建越障状态机
     CrossingStateMachine state_machine;
+    test::configureRailLimits(state_machine);
     state_machine.initialize(robot_state, window);
     
     // 4. 创建混合步态生成器
@@ -148,7 +151,7 @@ int main() {
         // 模拟滑动副运动
         if (current_state == CrossingStateMachine::CrossingState::BODY_FORWARD_SHIFT) {
             // 机身前探：滑动副伸展
-            robot_state.sliding_positions << -0.111, 0.111, 0.111, -0.111;
+            robot_state.sliding_positions = test::testCompactRailTarget();
         } else if (current_state == CrossingStateMachine::CrossingState::RECOVERY) {
             // 恢复：滑动副收缩
             robot_state.sliding_positions.setZero();

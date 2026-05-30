@@ -15,6 +15,9 @@
 #include <cmath>
 #include <sstream>
 
+#include "dog2_dynamics/dog2_model.hpp"
+#include <stdexcept>
+
 namespace dog2_mpc {
 
 /**
@@ -47,8 +50,33 @@ public:
     }
 
 private:
+    Eigen::Vector4d rail_position_lower_;
+    Eigen::Vector4d rail_position_upper_;
+
+    void loadRailLimitsFromRobotDescription() {
+        const std::string robot_description =
+            this->get_parameter("robot_description").as_string();
+
+        if (robot_description.empty()) {
+            throw std::runtime_error(
+                "mpc_node_complete requires robot_description parameter to load rail limits from URDF");
+        }
+
+        const auto dog2_model = dog2_dynamics::Dog2Model::fromUrdfXml(robot_description);
+        rail_position_lower_ = dog2_model.slidingJointLowerLimits();
+        rail_position_upper_ = dog2_model.slidingJointUpperLimits();
+
+        RCLCPP_INFO(this->get_logger(),
+                    "Loaded rail limits from URDF: lower=[%.3f %.3f %.3f %.3f], upper=[%.3f %.3f %.3f %.3f]",
+                    rail_position_lower_(0), rail_position_lower_(1),
+                    rail_position_lower_(2), rail_position_lower_(3),
+                    rail_position_upper_(0), rail_position_upper_(1),
+                    rail_position_upper_(2), rail_position_upper_(3));
+    }
+
     void initializeParameters() {
         // 声明参数
+        this->declare_parameter<std::string>("robot_description", "");
         this->declare_parameter("mass", 11.8);
         this->declare_parameter("horizon", 10);
         this->declare_parameter("dt", 0.05);
@@ -133,6 +161,8 @@ private:
     }
     
     void initializeControllers() {
+        loadRailLimitsFromRobotDescription();
+
         // 惯性张量
         Eigen::Matrix3d inertia;
         inertia << 0.0153, 0.00011, 0.0,
@@ -160,6 +190,7 @@ private:
         
         // 创建控制器
         mpc_controller_ = std::make_unique<MPCController>(mass_, inertia, mpc_params);
+        mpc_controller_->setSlidingPositionLimits(rail_position_lower_, rail_position_upper_);
 
         // rail soft bound exact penalty 一次项权重（支持动态调参）
         mpc_controller_->setSlackLinearWeight(
@@ -320,8 +351,8 @@ private:
         }
 
         Eigen::Vector4d sanitized = velocities;
-        const Eigen::Vector4d rail_min((Eigen::Vector4d() << 0.0, -0.111, 0.0, -0.111).finished());
-        const Eigen::Vector4d rail_max((Eigen::Vector4d() << 0.111, 0.0, 0.111, 0.0).finished());
+        const Eigen::Vector4d& rail_min = rail_position_lower_;
+        const Eigen::Vector4d& rail_max = rail_position_upper_;
         constexpr double kLimitMargin = 0.002;
         constexpr double kMaxPredictionVelocity = 0.25;
 

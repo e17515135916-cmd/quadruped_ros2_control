@@ -1,9 +1,11 @@
 #include "dog2_mpc/mpc_controller.hpp"
 #include "dog2_mpc/extended_srbd_model.hpp"
+#include "test_helpers.hpp"
 #include <iostream>
 #include <iomanip>
 
 using namespace dog2_mpc;
+using namespace dog2_mpc::test;
 
 /**
  * @brief 测试完整的16维MPC + 滑动副约束
@@ -39,6 +41,7 @@ int main() {
     mpc_params.enable_boundary_constraints = false;
     
     MPCController mpc_controller(11.8, inertia, mpc_params);
+    test::configureRailLimits(mpc_controller);
     
     // 2. 设置16维初始状态（滑动副位置满足协调约束：Σd≈0）
     Eigen::VectorXd x0(16);
@@ -129,8 +132,8 @@ int main() {
         std::cout << "\n=== 滑动副约束验证 ===" << std::endl;
         
         // 检查位置限位
-        Eigen::Vector4d d_min(-0.111, -0.008, -0.008, -0.111);
-        Eigen::Vector4d d_max(0.008, 0.111, 0.111, 0.008);
+        Eigen::Vector4d d_min = test::testRailLowerLimits();
+        Eigen::Vector4d d_max = test::testRailUpperLimits();
         
         bool position_ok = true;
         for (int k = 0; k < mpc_params.horizon; ++k) {

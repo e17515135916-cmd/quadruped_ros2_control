@@ -24,6 +24,7 @@ int main() {
     params.enable_sliding_constraints = false;  // 先禁用滑动副约束
     
     MPCController mpc(mass, inertia, params);
+    configureRailLimits(mpc);
     
     // 设置基础足端位置
     Eigen::MatrixXd foot_positions(4, 3);

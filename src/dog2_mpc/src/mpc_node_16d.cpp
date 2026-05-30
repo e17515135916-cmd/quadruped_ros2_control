@@ -1,9 +1,11 @@
 #include "dog2_mpc/mpc_controller.hpp"
+#include "dog2_dynamics/dog2_model.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <Eigen/Dense>
+#include <stdexcept>
 
 namespace dog2_mpc {
 
@@ -20,6 +22,7 @@ class MPCNode16D : public rclcpp::Node {
 public:
     MPCNode16D() : Node("mpc_node_16d") {
         // 声明参数
+        this->declare_parameter<std::string>("robot_description", "");
         this->declare_parameter("mass", 11.8);
         this->declare_parameter("horizon", 10);
         this->declare_parameter("dt", 0.05);
@@ -36,6 +39,8 @@ public:
         int horizon = this->get_parameter("horizon").as_int();
         double dt = this->get_parameter("dt").as_double();
         double control_freq = this->get_parameter("control_frequency").as_double();
+
+        loadRailLimitsFromRobotDescription();
         
         // 惯性张量
         Eigen::Matrix3d inertia;
@@ -69,6 +74,7 @@ public:
         
         // 创建16维MPC控制器
         mpc_controller_ = std::make_unique<MPCController>(mass, inertia, params);
+        mpc_controller_->setSlidingPositionLimits(rail_position_lower_, rail_position_upper_);
 
         // rail soft-bound exact penalty 一次项权重（支持动态调参）
         mpc_controller_->setSlackLinearWeight(
@@ -136,6 +142,30 @@ public:
     }
 
 private:
+    Eigen::Vector4d rail_position_lower_;
+    Eigen::Vector4d rail_position_upper_;
+
+    void loadRailLimitsFromRobotDescription() {
+        const std::string robot_description =
+            this->get_parameter("robot_description").as_string();
+
+        if (robot_description.empty()) {
+            throw std::runtime_error(
+                "mpc_node_16d requires robot_description parameter to load rail limits from URDF");
+        }
+
+        const auto dog2_model = dog2_dynamics::Dog2Model::fromUrdfXml(robot_description);
+        rail_position_lower_ = dog2_model.slidingJointLowerLimits();
+        rail_position_upper_ = dog2_model.slidingJointUpperLimits();
+
+        RCLCPP_INFO(this->get_logger(),
+                    "Loaded rail limits from URDF: lower=[%.3f %.3f %.3f %.3f], upper=[%.3f %.3f %.3f %.3f]",
+                    rail_position_lower_(0), rail_position_lower_(1),
+                    rail_position_lower_(2), rail_position_lower_(3),
+                    rail_position_upper_(0), rail_position_upper_(1),
+                    rail_position_upper_(2), rail_position_upper_(3));
+    }
+
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
         // 提取SRBD状态（12维）
         Eigen::VectorXd srbd_state(12);

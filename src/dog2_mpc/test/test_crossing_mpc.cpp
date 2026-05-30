@@ -31,6 +31,7 @@ bool testCrossingInitialization() {
     params.dt = 0.05;
     
     MPCController mpc(mass, inertia, params);
+    configureRailLimits(mpc);
     
     // 设置初始状态
     CrossingStateMachine::RobotState initial_state;
@@ -92,7 +93,8 @@ bool testCrossingReferenceGeneration() {
     params.dt = 0.05;
     
     MPCController mpc(mass, inertia, params);
-    
+    configureRailLimits(mpc);
+
     // 初始化越障
     CrossingStateMachine::RobotState robot_state;
     robot_state.position = Eigen::Vector3d(1.8, 0.0, 0.3);
@@ -158,7 +160,8 @@ bool testCrossingMPCSolve() {
     params.enable_sliding_constraints = true;
     
     MPCController mpc(mass, inertia, params);
-    
+    configureRailLimits(mpc);
+
     // 设置基础足端位置
     Eigen::MatrixXd foot_positions(4, 3);
     foot_positions << 0.2,  0.15, 0.0,   // 腿1
@@ -255,6 +258,7 @@ bool testCrossingStateUpdate() {
     params.dt = 0.05;
     
     MPCController mpc(mass, inertia, params);
+    configureRailLimits(mpc);
     
     // 初始化越障
     CrossingStateMachine::RobotState robot_state;

@@ -1,9 +1,11 @@
 #include "dog2_mpc/extended_srbd_model.hpp"
 #include "dog2_mpc/sliding_constraints.hpp"
+#include "test_helpers.hpp"
 #include <iostream>
 #include <iomanip>
 
 using namespace dog2_mpc;
+using namespace dog2_mpc::test;
 
 /**
  * @brief 测试滑动副约束的核心功能
@@ -142,9 +144,8 @@ int main() {
     SlidingConstraints sliding_constraints;
     
     // 设置约束参数
-    Eigen::Vector4d d_min, d_max;
-    d_min << -0.111, -0.008, -0.008, -0.111;  // j1, j2, j3, j4 下限
-    d_max << 0.008, 0.111, 0.111, 0.008;     // j1, j2, j3, j4 上限
+    Eigen::Vector4d d_min = test::testRailLowerLimits();
+    Eigen::Vector4d d_max = test::testRailUpperLimits();
     
     sliding_constraints.setPositionLimits(d_min, d_max);
     sliding_constraints.setVelocityLimit(1.0);  // 1 m/s

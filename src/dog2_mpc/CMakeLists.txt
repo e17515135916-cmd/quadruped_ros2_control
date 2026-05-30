@@ -12,6 +12,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(dog2_dynamics REQUIRED)
 
 # Find OSQP
 find_package(PkgConfig REQUIRED)
@@ -232,6 +233,7 @@ ament_target_dependencies(mpc_node_16d
   sensor_msgs
   std_msgs
   Eigen3
+  dog2_dynamics
 )
 
 # Complete MPC Node executable (with trajectory generation and contact detection)
@@ -265,6 +267,7 @@ ament_target_dependencies(mpc_node_complete
   sensor_msgs
   std_msgs
   Eigen3
+  dog2_dynamics
 )
 
 # State Simulator dependencies

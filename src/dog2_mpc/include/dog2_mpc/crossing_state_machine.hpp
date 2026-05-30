@@ -190,6 +190,9 @@ public:
      */
     WindowObstacle getWindowObstacle() const { return window_; }
 
+    void setPhysicalSlidingLimits(const Eigen::Vector4d& lower,
+                                  const Eigen::Vector4d& upper);
+
     /**
      * @brief 设置 rail tracking guard 阈值（单位：m）
      */
@@ -226,6 +229,10 @@ private:
     
     RobotState initial_state_;      ///< 初始状态
     WindowObstacle window_;         ///< 窗框参数
+
+    Eigen::Vector4d physical_sliding_min_;
+    Eigen::Vector4d physical_sliding_max_;
+    bool has_physical_sliding_limits_;
 
     /**
      * @brief 稳定保持时间（稳定 transition graph 的关键：guards 需要连续满足才允许切换）

@@ -88,6 +88,17 @@ public:
      */
     void setSlidingVelocity(const Eigen::Vector4d& sliding_velocity);
 
+    void setSlidingPositionLimits(const Eigen::Vector4d& lower,
+                                  const Eigen::Vector4d& upper);
+
+    const Eigen::Vector4d& slidingPositionLowerLimits() const {
+        return sliding_position_lower_;
+    }
+
+    const Eigen::Vector4d& slidingPositionUpperLimits() const {
+        return sliding_position_upper_;
+    }
+
     /**
      * @brief 设置越障状态机 guard 参数（用于 stable transition / rail tracking / support polygon）
      * @param rail_tracking_error_threshold rail tracking guard 阈值（单位：m）
@@ -313,6 +324,9 @@ private:
     // 基础足端位置和滑动副速度
     Eigen::MatrixXd base_foot_positions_;
     Eigen::Vector4d sliding_velocity_;
+    Eigen::Vector4d sliding_position_lower_;
+    Eigen::Vector4d sliding_position_upper_;
+    bool has_sliding_position_limits_;
     
     // 线性化结果（16维扩展）
     std::vector<Eigen::MatrixXd> A_matrices_;  ///< 状态转移矩阵序列 (16×16)
