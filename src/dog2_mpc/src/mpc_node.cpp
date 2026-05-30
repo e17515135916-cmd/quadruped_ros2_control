@@ -15,7 +15,8 @@ public:
         this->declare_parameter("horizon", 20);
         this->declare_parameter("dt", 0.05);
         this->declare_parameter("control_frequency", 20.0);
-        this->declare_parameter("enable_sliding_constraints", true);
+        // legacy 12D node does not own rail state; use mpc_node_16d/mpc_node_complete for rail MPC.
+        this->declare_parameter("enable_sliding_constraints", false);
         this->declare_parameter("enable_boundary_constraints", true);
         
         // 获取参数

@@ -56,16 +56,27 @@ if(BUILD_TESTING AND DOG2_ENABLE_URDF_SHIFT_BOUNDARY_CHECK)
         ${CMAKE_CURRENT_SOURCE_DIR}/urdf/dog2.urdf.xacro
         --strict
     )
-    add_test(
-      NAME dog2_stage2_rail_geometry_check
-      COMMAND
-        ${PYTHON3_EXECUTABLE}
-        ${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_stage2_rail_geometry.py
-        --xacro
-        ${CMAKE_CURRENT_SOURCE_DIR}/urdf/dog2.urdf.xacro
-        --golden
-        ${CMAKE_CURRENT_SOURCE_DIR}/config/migration_stage2_stand.json
+
+    execute_process(
+      COMMAND ${PYTHON3_EXECUTABLE} -c "import pinocchio"
+      RESULT_VARIABLE DOG2_PINOCCHIO_PY_RESULT
+      OUTPUT_QUIET
+      ERROR_QUIET
     )
+    if(DOG2_PINOCCHIO_PY_RESULT EQUAL 0)
+      add_test(
+        NAME dog2_stage2_rail_geometry_check
+        COMMAND
+          ${PYTHON3_EXECUTABLE}
+          ${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_stage2_rail_geometry.py
+          --xacro
+          ${CMAKE_CURRENT_SOURCE_DIR}/urdf/dog2.urdf.xacro
+          --golden
+          ${CMAKE_CURRENT_SOURCE_DIR}/config/migration_stage2_stand.json
+      )
+    else()
+      message(WARNING "Skip dog2_stage2_rail_geometry_check: python3 pinocchio module is unavailable")
+    endif()
   else()
     message(WARNING "Skip dog2_urdf_shift_boundary_check: python3 or xacro not found")
   endif()

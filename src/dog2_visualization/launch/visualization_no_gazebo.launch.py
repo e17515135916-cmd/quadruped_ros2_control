@@ -87,7 +87,8 @@ def generate_launch_description():
             'dt': 0.05,
             'control_frequency': 20.0,
             'enable_sliding_constraints': True,
-            'mode': LaunchConfiguration('mode')
+            'mode': LaunchConfiguration('mode'),
+            'robot_description': robot_description
         }]
     )
     

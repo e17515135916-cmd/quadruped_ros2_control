@@ -20,6 +20,7 @@ int main() {
     reporter.printSection("测试1：状态机初始化");
     
     CrossingStateMachine state_machine;
+    test::configureRailLimits(state_machine);
     
     // 初始化机器人状态
     CrossingStateMachine::RobotState robot_state;
@@ -78,7 +79,7 @@ int main() {
     
     // 测试2.2：机身前探完成条件
     test_count++;
-    robot_state.sliding_positions << -0.111, 0.111, 0.111, -0.111;
+    robot_state.sliding_positions = test::testCompactRailTarget();
     state_machine.forceTransitionTo(CrossingStateMachine::CrossingState::BODY_FORWARD_SHIFT);
     
     if (state_machine.canTransitionToNext(robot_state)) {

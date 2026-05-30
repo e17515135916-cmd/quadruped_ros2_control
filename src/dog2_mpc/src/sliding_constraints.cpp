@@ -7,10 +7,10 @@ SlidingConstraints::SlidingConstraints()
       epsilon_sym_(0.02),
       enable_symmetry_(true),
       enable_coordination_(true) {
-    // Canonical rail limits from dog2.urdf.xacro:
-    // lf/rh in [0.0, 0.111], lh/rf in [-0.111, 0.0].
-    d_min_ << 0.0, -0.111, 0.0, -0.111;
-    d_max_ << 0.111, 0.0, 0.111, 0.0;
+    // Defaults are zero; real limits must be injected via setPositionLimits()
+    // before constraints are applied (enforced by MPCController guard).
+    d_min_ << 0.0, 0.0, 0.0, 0.0;
+    d_max_ << 0.0, 0.0, 0.0, 0.0;
 }
 
 void SlidingConstraints::setPositionLimits(const Eigen::Vector4d& lower,

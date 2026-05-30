@@ -4,7 +4,8 @@ mpc_node:
     horizon: 20  # steps
     dt: 0.05  # s
     control_frequency: 20.0  # Hz
-    enable_sliding_constraints: true
+    # legacy 12D node does not own rail state; use mpc_node_16d/mpc_node_complete for rail MPC.
+    enable_sliding_constraints: false
     enable_boundary_constraints: true
 
 mpc_node_16d:

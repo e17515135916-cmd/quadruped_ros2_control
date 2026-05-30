@@ -1,152 +1,220 @@
 #include "dog2_dynamics/dog2_model.hpp"
 #include <pinocchio/algorithm/center-of-mass.hpp>
 #include <pinocchio/algorithm/frames.hpp>
+#include <stdexcept>
 #include <iostream>
 
-namespace dog2_dynamics {
+namespace dog2_dynamics
+{
 
-Dog2Model::Dog2Model(const std::string& urdf_path) {
-    // 加载URDF
-    try {
-        pinocchio::urdf::buildModel(urdf_path, model_);
-        data_ = pinocchio::Data(model_);
-        
-        // 缓存足端frame ID
-        cacheFrameIds();
-        
-        std::cout << "✓ Dog2 Model loaded successfully" << std::endl;
-        std::cout << "  URDF: " << urdf_path << std::endl;
-        std::cout << "  nq = " << model_.nq << ", nv = " << model_.nv << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "✗ Failed to load URDF: " << e.what() << std::endl;
-        throw;
-    }
-}
+namespace {
 
-void Dog2Model::cacheFrameIds() {
-    foot_frame_ids_.clear();
-    for (const auto& foot_name : FOOT_NAMES) {
-        if (model_.existFrame(foot_name)) {
-            foot_frame_ids_.push_back(model_.getFrameId(foot_name));
-        } else {
-            std::cerr << "Warning: Foot frame '" << foot_name << "' not found in URDF" << std::endl;
+Eigen::Vector4d readRailPositionLimits(
+    const pinocchio::Model& model,
+    const char* const (&joint_names)[4],
+    bool upper) {
+    Eigen::Vector4d limits;
+
+    for (int i = 0; i < 4; ++i) {
+        const char* joint_name = joint_names[i];
+        if (!model.existJointName(joint_name)) {
+            throw std::runtime_error(
+                std::string("Missing rail joint in Pinocchio model: ") + joint_name);
         }
+
+        const auto joint_id = model.getJointId(joint_name);
+        if (model.nqs[joint_id] != 1) {
+            throw std::runtime_error(
+                std::string("Rail joint is expected to have nq=1: ") + joint_name);
+        }
+
+        const int q_index = model.idx_qs[joint_id];
+        limits(i) = upper ? model.upperPositionLimit[q_index]
+                          : model.lowerPositionLimit[q_index];
     }
+
+    return limits;
 }
 
-double Dog2Model::mass() const {
-    return pinocchio::computeTotalMass(model_);
+}  // namespace
+
+Dog2Model::Dog2Model(const std::string & urdf_path)
+{
+  try {
+    pinocchio::urdf::buildModel(urdf_path, model_);
+    finishInitialization("URDF path: " + urdf_path);
+  } catch (const std::exception & e) {
+    std::cerr << "✗ Failed to load URDF: " << e.what() << std::endl;
+    throw;
+  }
 }
 
-void Dog2Model::forwardKinematics(const Eigen::VectorXd& q) {
-    pinocchio::forwardKinematics(model_, data_, q);
-    pinocchio::updateGlobalPlacements(model_, data_);
+Dog2Model Dog2Model::fromUrdfXml(const std::string & urdf_xml)
+{
+  Dog2Model robot;
+  try {
+    pinocchio::urdf::buildModelFromXML(urdf_xml, robot.model_);
+    robot.finishInitialization("URDF XML");
+    return robot;
+  } catch (const std::exception & e) {
+    std::cerr << "✗ Failed to load URDF XML: " << e.what() << std::endl;
+    throw;
+  }
 }
 
-void Dog2Model::forwardKinematics(const Eigen::VectorXd& q, const Eigen::VectorXd& v) {
-    pinocchio::forwardKinematics(model_, data_, q, v);
-    pinocchio::updateGlobalPlacements(model_, data_);
+void Dog2Model::finishInitialization(const std::string & source_label)
+{
+  data_ = pinocchio::Data(model_);
+  cacheFrameIds();
+
+  std::cout << "✓ Dog2 Model loaded successfully" << std::endl;
+  std::cout << "  Source: " << source_label << std::endl;
+  std::cout << "  nq = " << model_.nq << ", nv = " << model_.nv << std::endl;
 }
 
-void Dog2Model::forwardKinematics(const Eigen::VectorXd& q, const Eigen::VectorXd& v, 
-                                  const Eigen::VectorXd& a) {
-    pinocchio::forwardKinematics(model_, data_, q, v, a);
-    pinocchio::updateGlobalPlacements(model_, data_);
-}
-
-Eigen::Vector3d Dog2Model::centerOfMass(const Eigen::VectorXd& q) {
-    return pinocchio::centerOfMass(model_, data_, q);
-}
-
-Eigen::Vector3d Dog2Model::centerOfMassVelocity(const Eigen::VectorXd& q, const Eigen::VectorXd& v) {
-    pinocchio::centerOfMass(model_, data_, q, v);
-    return data_.vcom[0];
-}
-
-Eigen::Vector3d Dog2Model::footPosition(const std::string& foot_name, const Eigen::VectorXd& q) {
-    forwardKinematics(q);
-    
-    if (!model_.existFrame(foot_name)) {
-        std::cerr << "Error: Frame '" << foot_name << "' not found" << std::endl;
-        return Eigen::Vector3d::Zero();
+void Dog2Model::cacheFrameIds()
+{
+  foot_frame_ids_.clear();
+  for (const auto & foot_name : FOOT_NAMES) {
+    if (model_.existFrame(foot_name)) {
+      foot_frame_ids_.push_back(model_.getFrameId(foot_name));
+    } else {
+      throw std::runtime_error(
+              std::string("Foot frame '") + foot_name +
+              "' not found in URDF. All foot frames are required for dynamics.");
     }
-    
-    auto frame_id = model_.getFrameId(foot_name);
-    return data_.oMf[frame_id].translation();
+  }
 }
 
-std::vector<Eigen::Vector3d> Dog2Model::allFootPositions(const Eigen::VectorXd& q) {
-    forwardKinematics(q);
-    
-    std::vector<Eigen::Vector3d> positions;
-    for (auto frame_id : foot_frame_ids_) {
-        positions.push_back(data_.oMf[frame_id].translation());
-    }
-    return positions;
+double Dog2Model::mass() const
+{
+  return pinocchio::computeTotalMass(model_);
 }
 
-Eigen::MatrixXd Dog2Model::footJacobian(const std::string& foot_name, const Eigen::VectorXd& q) {
-    if (!model_.existFrame(foot_name)) {
-        std::cerr << "Error: Frame '" << foot_name << "' not found" << std::endl;
-        return Eigen::MatrixXd::Zero(6, model_.nv);
-    }
-    
-    auto frame_id = model_.getFrameId(foot_name);
-    Eigen::MatrixXd J(6, model_.nv);
-    J.setZero();
-    pinocchio::computeFrameJacobian(model_, data_, q, frame_id, pinocchio::WORLD, J);
-    return J;
+void Dog2Model::forwardKinematics(const Eigen::VectorXd & q)
+{
+  pinocchio::forwardKinematics(model_, data_, q);
+  pinocchio::updateFramePlacements(model_, data_);
 }
 
-Eigen::MatrixXd Dog2Model::comJacobian(const Eigen::VectorXd& q) {
-    pinocchio::jacobianCenterOfMass(model_, data_, q);
-    return data_.Jcom;
+void Dog2Model::forwardKinematics(const Eigen::VectorXd & q, const Eigen::VectorXd & v)
+{
+  pinocchio::forwardKinematics(model_, data_, q, v);
+  pinocchio::updateFramePlacements(model_, data_);
 }
 
-Eigen::MatrixXd Dog2Model::massMatrix(const Eigen::VectorXd& q) {
-    pinocchio::crba(model_, data_, q);
-    // 对称化质量矩阵（CRBA只计算上三角）
-    data_.M.triangularView<Eigen::StrictlyLower>() = 
-        data_.M.transpose().triangularView<Eigen::StrictlyLower>();
-    return data_.M;
+void Dog2Model::forwardKinematics(
+  const Eigen::VectorXd & q, const Eigen::VectorXd & v,
+  const Eigen::VectorXd & a)
+{
+  pinocchio::forwardKinematics(model_, data_, q, v, a);
+  pinocchio::updateFramePlacements(model_, data_);
 }
 
-Eigen::VectorXd Dog2Model::nonlinearEffects(const Eigen::VectorXd& q, const Eigen::VectorXd& v) {
-    return pinocchio::nonLinearEffects(model_, data_, q, v);
+Eigen::Vector3d Dog2Model::centerOfMass(const Eigen::VectorXd & q)
+{
+  return pinocchio::centerOfMass(model_, data_, q);
 }
 
-Eigen::VectorXd Dog2Model::gravityVector(const Eigen::VectorXd& q) {
-    Eigen::VectorXd v = Eigen::VectorXd::Zero(model_.nv);
-    Eigen::VectorXd a = Eigen::VectorXd::Zero(model_.nv);
-    return pinocchio::rnea(model_, data_, q, v, a);
+Eigen::Vector3d Dog2Model::centerOfMassVelocity(
+  const Eigen::VectorXd & q,
+  const Eigen::VectorXd & v)
+{
+  pinocchio::centerOfMass(model_, data_, q, v);
+  return data_.vcom[0];
+}
+
+Eigen::Vector3d Dog2Model::footPosition(const std::string & foot_name, const Eigen::VectorXd & q)
+{
+  forwardKinematics(q);
+
+  if (!model_.existFrame(foot_name)) {
+    throw std::runtime_error(
+            std::string("Foot frame '") + foot_name +
+            "' not found in URDF. Returning a zero vector would hide a model/URDF mismatch.");
+  }
+
+  auto frame_id = model_.getFrameId(foot_name);
+  return data_.oMf[frame_id].translation();
+}
+
+std::vector<Eigen::Vector3d> Dog2Model::allFootPositions(const Eigen::VectorXd & q)
+{
+  forwardKinematics(q);
+
+  std::vector<Eigen::Vector3d> positions;
+  for (auto frame_id : foot_frame_ids_) {
+    positions.push_back(data_.oMf[frame_id].translation());
+  }
+  return positions;
+}
+
+Eigen::MatrixXd Dog2Model::footJacobian(const std::string & foot_name, const Eigen::VectorXd & q)
+{
+  if (!model_.existFrame(foot_name)) {
+    throw std::runtime_error(
+            std::string("Foot frame '") + foot_name +
+            "' not found in URDF. Returning a zero Jacobian would hide a model/URDF mismatch.");
+  }
+
+  auto frame_id = model_.getFrameId(foot_name);
+  Eigen::MatrixXd J(6, model_.nv);
+  J.setZero();
+  pinocchio::computeFrameJacobian(model_, data_, q, frame_id, pinocchio::WORLD, J);
+  return J;
+}
+
+Eigen::MatrixXd Dog2Model::comJacobian(const Eigen::VectorXd & q)
+{
+  pinocchio::jacobianCenterOfMass(model_, data_, q);
+  return data_.Jcom;
+}
+
+Eigen::MatrixXd Dog2Model::massMatrix(const Eigen::VectorXd & q)
+{
+  pinocchio::crba(model_, data_, q);
+  // 对称化质量矩阵（CRBA只计算上三角）
+  data_.M.triangularView<Eigen::StrictlyLower>() =
+    data_.M.transpose().triangularView<Eigen::StrictlyLower>();
+  return data_.M;
+}
+
+Eigen::VectorXd Dog2Model::nonlinearEffects(const Eigen::VectorXd & q, const Eigen::VectorXd & v)
+{
+  return pinocchio::nonLinearEffects(model_, data_, q, v);
+}
+
+Eigen::VectorXd Dog2Model::gravityVector(const Eigen::VectorXd & q)
+{
+  Eigen::VectorXd v = Eigen::VectorXd::Zero(model_.nv);
+  Eigen::VectorXd a = Eigen::VectorXd::Zero(model_.nv);
+  return pinocchio::rnea(model_, data_, q, v, a);
 }
 
 Dog2Model::SlidingJointState Dog2Model::getSlidingJointState(
-    const Eigen::VectorXd& q, const Eigen::VectorXd& v) const {
-    
-    SlidingJointState state;
-    
-    // Dog2的前4个速度自由度是滑动副
-    // 注意：nq=28（包含SO(2)表示），但nv=16
-    // 滑动副在速度空间的前4维
-    state.positions = q.head<4>();
-    state.velocities = v.head<4>();
-    state.forces.setZero();  // 力需要从逆动力学计算
-    
-    return state;
+  const Eigen::VectorXd & q, const Eigen::VectorXd & v) const
+{
+
+  SlidingJointState state;
+
+  // Dog2 的前4个位置/速度自由度是滑动副。
+  // 当前 URDF 经 Pinocchio 构建后 nq=16, nv=16；不要按旧 SO(2) 注释推断索引。
+  // 滑动副在 q/v 的前4维，顺序为 [lf, lh, rh, rf]。
+  state.positions = q.head<4>();
+  state.velocities = v.head<4>();
+  state.forces.setZero();    // 力需要从逆动力学计算
+
+  return state;
 }
 
-Eigen::Vector4d Dog2Model::slidingJointLowerLimits() const {
-    // 从URDF中的关节限位
-    Eigen::Vector4d limits;
-    limits << 0.0, -0.111, 0.0, -0.111;  // lf, lh, rh, rf (单位：m)
-    return limits;
+Eigen::Vector4d Dog2Model::slidingJointLowerLimits() const
+{
+  return readRailPositionLimits(model_, RAIL_JOINT_NAMES, false);
 }
 
-Eigen::Vector4d Dog2Model::slidingJointUpperLimits() const {
-    Eigen::Vector4d limits;
-    limits << 0.111, 0.0, 0.111, 0.0;  // lf, lh, rh, rf (单位：m)
-    return limits;
+Eigen::Vector4d Dog2Model::slidingJointUpperLimits() const
+{
+  return readRailPositionLimits(model_, RAIL_JOINT_NAMES, true);
 }
 
 } // namespace dog2_dynamics

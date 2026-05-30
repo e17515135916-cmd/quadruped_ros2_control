@@ -11,6 +11,8 @@
 
   <depend>rclcpp</depend>
   <depend>ros-humble-pinocchio</depend>
+  <depend>ament_index_cpp</depend>
+  <exec_depend>dog2_description</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

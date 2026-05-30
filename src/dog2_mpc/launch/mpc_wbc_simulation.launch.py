@@ -46,7 +46,10 @@ def generate_launch_description():
         executable="mpc_node_16d",
         name="mpc_node_16d",
         output="screen",
-        parameters=[control_param_file, {"use_sim_time": use_sim_time}],
+        parameters=[
+            control_param_file,
+            {"use_sim_time": use_sim_time, "robot_description": robot_description},
+        ],
     )
 
     wbc_node_simple = Node(

@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <stdexcept>
 
 namespace dog2_mpc {
 
@@ -21,6 +22,9 @@ MPCController::MPCController(double mass,
       base_foot_positions_(Eigen::MatrixXd::Zero(4, 3)),
       sliding_velocity_(Eigen::Vector4d::Zero()),
       crossing_enabled_(false),
+      sliding_position_lower_(Eigen::Vector4d::Zero()),
+      sliding_position_upper_(Eigen::Vector4d::Zero()),
+      has_sliding_position_limits_(false),
       freeze_crossing_rail_targets_(false),
       bfs_rail_ramp_enabled_(true),
       bfs_rail_gate_freeze_(false),
@@ -98,6 +102,26 @@ void MPCController::setBaseFootPositions(const Eigen::MatrixXd& foot_positions) 
 void MPCController::setSlidingVelocity(const Eigen::Vector4d& sliding_velocity) {
     sliding_velocity_ = sliding_velocity;
     extended_srbd_model_->setSlidingVelocity(sliding_velocity);
+}
+
+void MPCController::setSlidingPositionLimits(const Eigen::Vector4d& lower,
+                                             const Eigen::Vector4d& upper) {
+    if (!lower.allFinite() || !upper.allFinite()) {
+        throw std::invalid_argument("Rail position limits must be finite");
+    }
+    if ((lower.array() > upper.array()).any()) {
+        throw std::invalid_argument("Rail lower limits must be <= upper limits");
+    }
+
+    sliding_position_lower_ = lower;
+    sliding_position_upper_ = upper;
+    has_sliding_position_limits_ = true;
+
+    sliding_constraints_.setPositionLimits(lower, upper);
+
+    if (crossing_state_machine_) {
+        crossing_state_machine_->setPhysicalSlidingLimits(lower, upper);
+    }
 }
 
 void MPCController::setCrossingGuardParams(double rail_tracking_error_threshold,
@@ -783,6 +807,12 @@ void MPCController::addSlidingConstraints(std::vector<Eigen::Triplet<double>>& A
     const int nu = 12;
     const int sliding_start_idx = 12;  // 滑动副在状态向量中的起始索引
 
+    if (!has_sliding_position_limits_) {
+        throw std::runtime_error(
+            "MPCController rail position limits are not configured. "
+            "Call setSlidingPositionLimits() with limits loaded from dog2 URDF before solve().");
+    }
+
     if (crossing_enabled_ &&
         crossing_state_machine_ &&
         crossing_state_machine_->getCurrentState() == CrossingStateMachine::CrossingState::APPROACH) {
@@ -823,14 +853,9 @@ void MPCController::addSlidingConstraints(std::vector<Eigen::Triplet<double>>& A
             v_slide_max_vec.setConstant(std::max(0.020, bfs_rail_ramp_rate_ * 2.0));
         }
     } else {
-        // Canonical rail semantics from dog2.urdf.xacro:
-        // lf/rh in [0.0, 0.111], lh/rf in [-0.111, 0.0].
-        // Walking stage keeps rails near their current locked stance, so the
-        // primary feasibility constraints should only enforce these per-leg
-        // physical limits and rate bounds.
-        d_min << 0.0, -0.111, 0.0, -0.111;
-        d_max << 0.111, 0.0, 0.111, 0.0;
-        v_slide_max_vec.setConstant(1.0);  // 最大速度 1 m/s
+        d_min = sliding_position_lower_;
+        d_max = sliding_position_upper_;
+        v_slide_max_vec.setConstant(1.0);
     }
     // These are guardrail constraints, not the primary rail target. Keep them
     // loose enough that entering crossing with measured rails near arbitrary

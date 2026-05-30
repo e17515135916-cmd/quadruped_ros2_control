@@ -4,6 +4,8 @@
 #include <iostream>
 #include <iomanip>
 #include <string>
+#include "dog2_mpc/mpc_controller.hpp"
+#include "dog2_mpc/crossing_state_machine.hpp"
 
 namespace dog2_mpc {
 namespace test {
@@ -310,6 +312,34 @@ struct DimensionValidator {
         return true;
     }
 };
+
+inline Eigen::Vector4d testRailLowerLimits() {
+    Eigen::Vector4d v;
+    v << 0.0, -0.111, 0.0, -0.111;
+    return v;
+}
+
+inline Eigen::Vector4d testRailUpperLimits() {
+    Eigen::Vector4d v;
+    v << 0.111, 0.0, 0.111, 0.0;
+    return v;
+}
+
+inline Eigen::Vector4d testCompactRailTarget() {
+    const auto lower = testRailLowerLimits();
+    const auto upper = testRailUpperLimits();
+    Eigen::Vector4d v;
+    v << upper(0), lower(1), upper(2), lower(3);
+    return v;
+}
+
+inline void configureRailLimits(MPCController& mpc) {
+    mpc.setSlidingPositionLimits(testRailLowerLimits(), testRailUpperLimits());
+}
+
+inline void configureRailLimits(CrossingStateMachine& sm) {
+    sm.setPhysicalSlidingLimits(testRailLowerLimits(), testRailUpperLimits());
+}
 
 } // namespace test
 } // namespace dog2_mpc

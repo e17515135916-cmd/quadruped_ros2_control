@@ -7,10 +7,45 @@
 
 namespace dog2_mpc {
 
+namespace {
+
+constexpr double kCompactRailMargin = 0.011;  // 11 mm stage-policy margin, not a physical limit.
+
+double minRailTravel(const Eigen::Vector4d& lower, const Eigen::Vector4d& upper) {
+    double travel = upper(0) - lower(0);
+    for (int i = 1; i < 4; ++i) {
+        travel = std::min(travel, upper(i) - lower(i));
+    }
+    return travel;
+}
+
+double compactMargin(double lower, double upper) {
+    return std::min(kCompactRailMargin, 0.5 * std::max(0.0, upper - lower));
+}
+
+}  // namespace
+
 CrossingStateMachine::CrossingStateMachine()
     : current_state_(CrossingState::APPROACH),
       state_start_time_(0.0),
-      total_time_(0.0) {
+      total_time_(0.0),
+      physical_sliding_min_(Eigen::Vector4d::Zero()),
+      physical_sliding_max_(Eigen::Vector4d::Zero()),
+      has_physical_sliding_limits_(false) {
+}
+
+void CrossingStateMachine::setPhysicalSlidingLimits(const Eigen::Vector4d& lower,
+                                                    const Eigen::Vector4d& upper) {
+    if (!lower.allFinite() || !upper.allFinite()) {
+        throw std::invalid_argument("Physical rail limits must be finite");
+    }
+    if ((lower.array() > upper.array()).any()) {
+        throw std::invalid_argument("Physical rail lower limits must be <= upper limits");
+    }
+
+    physical_sliding_min_ = lower;
+    physical_sliding_max_ = upper;
+    has_physical_sliding_limits_ = true;
 }
 
 void CrossingStateMachine::initialize(const RobotState& initial_state, const WindowObstacle& window) {
@@ -84,16 +119,16 @@ CrossingStateMachine::RobotState CrossingStateMachine::getTargetState() const {
 }
 
 CrossingStateMachine::StageConstraints CrossingStateMachine::getCurrentConstraints() const {
+    if (!has_physical_sliding_limits_) {
+        throw std::runtime_error(
+            "CrossingStateMachine physical rail limits are not configured");
+    }
+
     StageConstraints constraints;
     
-    // Canonical Dog2 rail order and limits:
-    // [lf_rail_joint, lh_rail_joint, rh_rail_joint, rf_rail_joint].
-    // These values are derived from dog2.urdf.xacro / urdf_joint_limits.py;
-    // do not collapse them into a single signed constant because mirrored
-    // legs have different valid q ranges.
-    constraints.sliding_min << 0.0, -0.111, 0.0, -0.111;
-    constraints.sliding_max << 0.111, 0.0, 0.111, 0.0;
-    constraints.sliding_vel_max << 1.0, 1.0, 1.0, 1.0;  // 1.0 m/s
+    constraints.sliding_min = physical_sliding_min_;
+    constraints.sliding_max = physical_sliding_max_;
+    constraints.sliding_vel_max.setConstant(1.0);
     
     // 根据当前状态调整约束
     switch (current_state_) {
@@ -104,9 +139,22 @@ CrossingStateMachine::StageConstraints CrossingStateMachine::getCurrentConstrain
             
         case CrossingState::BODY_FORWARD_SHIFT:
             // Rail compact-body posture inside the real per-joint limits:
-            // lf/rh move toward +q, lh/rf move toward -q.
-            constraints.sliding_min << 0.100, -0.111, 0.100, -0.111;
-            constraints.sliding_max << 0.111, -0.100, 0.111, -0.100;
+            constraints.sliding_min = physical_sliding_min_;
+            constraints.sliding_max = physical_sliding_max_;
+
+            constraints.sliding_min(0) = std::max(
+                physical_sliding_min_(0),
+                physical_sliding_max_(0) - compactMargin(physical_sliding_min_(0), physical_sliding_max_(0)));
+            constraints.sliding_min(2) = std::max(
+                physical_sliding_min_(2),
+                physical_sliding_max_(2) - compactMargin(physical_sliding_min_(2), physical_sliding_max_(2)));
+
+            constraints.sliding_max(1) = std::min(
+                physical_sliding_max_(1),
+                physical_sliding_min_(1) + compactMargin(physical_sliding_min_(1), physical_sliding_max_(1)));
+            constraints.sliding_max(3) = std::min(
+                physical_sliding_max_(3),
+                physical_sliding_min_(3) + compactMargin(physical_sliding_min_(3), physical_sliding_max_(3)));
             break;
             
         case CrossingState::HYBRID_GAIT_WALKING:
@@ -539,11 +587,19 @@ bool CrossingStateMachine::checkApproachComplete(const RobotState& state) const 
 
 bool CrossingStateMachine::checkBodyForwardShiftComplete(const RobotState& state) const {
     // 机身前探完成条件：四个 rail 到达真实限位内的 compact-body 姿态。
-    constexpr double rail_done = 0.095;
-    bool diagonal_positive_extended = (state.sliding_positions[0] >= rail_done) &&
-                                      (state.sliding_positions[2] >= rail_done);
-    bool diagonal_negative_extended = (state.sliding_positions[1] <= -rail_done) &&
-                                      (state.sliding_positions[3] <= -rail_done);
+    const double positive_threshold_0 =
+        physical_sliding_max_(0) - compactMargin(physical_sliding_min_(0), physical_sliding_max_(0));
+    const double positive_threshold_2 =
+        physical_sliding_max_(2) - compactMargin(physical_sliding_min_(2), physical_sliding_max_(2));
+    const double negative_threshold_1 =
+        physical_sliding_min_(1) + compactMargin(physical_sliding_min_(1), physical_sliding_max_(1));
+    const double negative_threshold_3 =
+        physical_sliding_min_(3) + compactMargin(physical_sliding_min_(3), physical_sliding_max_(3));
+
+    bool diagonal_positive_extended = (state.sliding_positions[0] >= positive_threshold_0) &&
+                                      (state.sliding_positions[2] >= positive_threshold_2);
+    bool diagonal_negative_extended = (state.sliding_positions[1] <= negative_threshold_1) &&
+                                      (state.sliding_positions[3] <= negative_threshold_3);
 
     static int log_count = 0;
     if (++log_count % 20 == 0 ||
@@ -552,7 +608,10 @@ bool CrossingStateMachine::checkBodyForwardShiftComplete(const RobotState& state
                   << state.sliding_positions[0] << ", "
                   << state.sliding_positions[1] << ", "
                   << state.sliding_positions[2] << ", "
-                  << state.sliding_positions[3] << "] rail_done=" << rail_done
+                  << state.sliding_positions[3] << "] positive_thresholds=["
+                  << positive_threshold_0 << ", " << positive_threshold_2
+                  << "] negative_thresholds=["
+                  << negative_threshold_1 << ", " << negative_threshold_3 << "]"
                   << " pos_ok=" << diagonal_positive_extended
                   << " neg_ok=" << diagonal_negative_extended
                   << std::endl;
@@ -650,14 +709,17 @@ CrossingStateMachine::RobotState CrossingStateMachine::computeApproachTarget() c
 CrossingStateMachine::RobotState CrossingStateMachine::computeBodyForwardShiftTarget() const {
     RobotState target = initial_state_;
     
-    // 目标：机身前移0.111m
-    target.position.x() = window_.x_position - 0.2 + 0.111;
+    // 目标：机身前移
+    target.position.x() = window_.x_position - 0.2 + minRailTravel(physical_sliding_min_, physical_sliding_max_);
     target.velocity.setZero();
     
     // Rail compact-body target in real joint order:
     // lf_rail_joint -> +limit, lh_rail_joint -> -limit,
     // rh_rail_joint -> +limit, rf_rail_joint -> -limit.
-    target.sliding_positions << 0.111, -0.111, 0.111, -0.111;
+    target.sliding_positions << physical_sliding_max_(0),
+                                physical_sliding_min_(1),
+                                physical_sliding_max_(2),
+                                physical_sliding_min_(3);
     
     // 所有腿保持肘式，接触地面
     for (int i = 0; i < 4; ++i) {
