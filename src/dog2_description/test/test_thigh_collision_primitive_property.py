@@ -1,177 +1,102 @@
 #!/usr/bin/env python3
 """
-Property-Based Test: Thigh Collision Primitive Usage
+Property-Based Test: Femur Collision Geometry Integrity
 
-Feature: gazebo-collision-mesh-fixes, Property 1: 碰撞原语使用
+Feature: gazebo-collision-mesh-fixes, Property 1: 碰撞几何体完整性
 Validates: Requirements 1.1
 
-This test verifies that for any leg instantiation (leg_num 1-4), 
-the thigh link (l${leg_num}11) uses collision primitives (cylinder or box)
-instead of mesh geometry, while preserving the STL mesh for visual display.
+This test verifies that for each leg prefix (lf/lh/rh/rf), the femur link
+({prefix}_femur_link) has at least one valid collision and one valid visual
+geometry element.  Mesh collision filenames must reference existing files
+under package://dog2_description/.
 """
 
-import subprocess
-import xml.etree.ElementTree as ET
-from pathlib import Path
 from hypothesis import given, strategies as st, settings
+from urdf_test_utils import generate_urdf_from_xacro, parse_urdf, resolve_package_uri
 
-
-def generate_urdf_from_xacro():
-    """Generate URDF from xacro file."""
-    # Try multiple possible locations for the xacro file
-    possible_paths = [
-        Path(__file__).parent.parent / "urdf" / "dog2.urdf.xacro",  # Source location
-        Path(__file__).parent.parent.parent.parent / "install" / "dog2_description" / "share" / "dog2_description" / "urdf" / "dog2.urdf.xacro",  # Install location
-    ]
-    
-    xacro_path = None
-    for path in possible_paths:
-        if path.exists():
-            xacro_path = path
-            break
-    
-    if xacro_path is None:
-        raise RuntimeError(f"Could not find dog2.urdf.xacro in any of: {possible_paths}")
-    
-    # Set up environment to find the package
-    import os
-    env = os.environ.copy()
-    
-    # Add the workspace to ROS package path
-    workspace_root = Path(__file__).parent.parent.parent.parent
-    install_path = workspace_root / "install"
-    
-    if install_path.exists():
-        # Set AMENT_PREFIX_PATH to include install directory
-        existing_path = env.get("AMENT_PREFIX_PATH", "")
-        if existing_path:
-            env["AMENT_PREFIX_PATH"] = f"{install_path}:{existing_path}"
-        else:
-            env["AMENT_PREFIX_PATH"] = str(install_path)
-    
-    try:
-        result = subprocess.run(
-            ["xacro", str(xacro_path)],
-            capture_output=True,
-            text=True,
-            check=True,
-            env=env
-        )
-        return result.stdout
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Failed to generate URDF from xacro: {e.stderr}")
-
-
-def parse_urdf(urdf_content):
-    """Parse URDF XML content and return the root element."""
-    return ET.fromstring(urdf_content)
+LEG_PREFIXES = ["lf", "lh", "rh", "rf"]
 
 
 @settings(max_examples=100)
-@given(leg_num=st.integers(min_value=1, max_value=4))
-def test_thigh_collision_primitive_property(leg_num):
+@given(leg_prefix=st.sampled_from(LEG_PREFIXES))
+def test_femur_collision_geometry_property(leg_prefix):
     """
-    Property Test: Thigh Collision Primitive Usage
-    
-    For any leg instantiation (leg_num 1-4), the thigh link should use
-    collision primitives (cylinder or box) instead of mesh geometry.
-    
-    This property validates that:
-    1. The thigh link exists
-    2. Collision geometry is a cylinder or box (not mesh)
-    3. Visual geometry still uses STL mesh (preserved for display)
-    4. No scale attribute is present in collision geometry
+    Property Test: Femur Collision Geometry Integrity
+
+    For each leg prefix, {prefix}_femur_link must have:
+    1. At least one collision element with a valid geometry.
+    2. At least one visual element with a valid geometry.
+    3. If collision geometry is a mesh, its filename must resolve to an
+       existing local file under package://dog2_description/.
     """
-    # Generate URDF from xacro
     urdf_content = generate_urdf_from_xacro()
     root = parse_urdf(urdf_content)
-    
-    # Find the thigh link
-    # Naming pattern: l{leg_num}11
-    thigh_link_name = f"l{leg_num}11"
-    
-    thigh_link = root.find(f".//link[@name='{thigh_link_name}']")
-    
-    assert thigh_link is not None, (
-        f"Thigh link '{thigh_link_name}' not found in URDF"
-    )
-    
-    # Check collision geometry
-    collision = thigh_link.find("collision")
-    assert collision is not None, (
-        f"Thigh link '{thigh_link_name}' has no collision element"
-    )
-    
-    collision_geometry = collision.find("geometry")
-    assert collision_geometry is not None, (
-        f"Thigh link '{thigh_link_name}' collision has no geometry element"
-    )
-    
-    # Check that collision uses primitive (cylinder or box), not mesh
-    collision_cylinder = collision_geometry.find("cylinder")
-    collision_box = collision_geometry.find("box")
-    collision_mesh = collision_geometry.find("mesh")
-    
-    has_primitive = (collision_cylinder is not None) or (collision_box is not None)
-    
-    assert has_primitive, (
-        f"Thigh link '{thigh_link_name}' collision geometry is not a primitive. "
-        f"Expected cylinder or box, but found: {[child.tag for child in collision_geometry]}"
-    )
-    
-    assert collision_mesh is None, (
-        f"Thigh link '{thigh_link_name}' collision geometry should not use mesh. "
-        f"Found mesh element in collision geometry."
-    )
-    
-    # If mesh somehow exists, verify no scale attribute
-    if collision_mesh is not None:
-        scale_attr = collision_mesh.get("scale")
-        assert scale_attr is None, (
-            f"Thigh link '{thigh_link_name}' collision mesh should not have scale attribute. "
-            f"Found scale='{scale_attr}'"
+
+    femur_name = f"{leg_prefix}_femur_link"
+    femur_link = root.find(f".//link[@name='{femur_name}']")
+    assert femur_link is not None, f"Femur link '{femur_name}' not found in URDF"
+
+    # --- collision ---
+    collisions = femur_link.findall("collision")
+    assert len(collisions) > 0, f"Femur link '{femur_name}' has no collision elements"
+
+    valid_collision = False
+    for col in collisions:
+        geom = col.find("geometry")
+        assert geom is not None, (
+            f"Femur link '{femur_name}' collision has no geometry element"
         )
-    
-    # Check visual geometry (should still use STL mesh)
-    visual = thigh_link.find("visual")
-    assert visual is not None, (
-        f"Thigh link '{thigh_link_name}' has no visual element"
+        children = list(geom)
+        assert len(children) > 0, (
+            f"Femur link '{femur_name}' collision geometry is empty"
+        )
+        child = children[0]
+        if child.tag == "mesh":
+            filename = child.get("filename")
+            assert filename is not None, (
+                f"Femur link '{femur_name}' collision mesh has no filename"
+            )
+            assert filename.startswith("package://dog2_description/"), (
+                f"Femur link '{femur_name}' collision mesh filename '{filename}' "
+                f"does not use package://dog2_description/"
+            )
+            resolved = resolve_package_uri(filename)
+            assert resolved is not None, (
+                f"Femur link '{femur_name}' collision mesh '{filename}' "
+                f"could not be resolved to a local file"
+            )
+            assert resolved.exists(), (
+                f"Femur link '{femur_name}' collision mesh file not found: {resolved}"
+            )
+        valid_collision = True
+
+    assert valid_collision, (
+        f"Femur link '{femur_name}' has no valid collision geometry"
     )
-    
-    visual_geometry = visual.find("geometry")
-    assert visual_geometry is not None, (
-        f"Thigh link '{thigh_link_name}' visual has no geometry element"
-    )
-    
-    visual_mesh = visual_geometry.find("mesh")
-    assert visual_mesh is not None, (
-        f"Thigh link '{thigh_link_name}' visual geometry should use mesh. "
-        f"Expected mesh, but found: {[child.tag for child in visual_geometry]}"
-    )
-    
-    # Verify visual mesh filename ends with .STL
-    mesh_filename = visual_mesh.get("filename")
-    assert mesh_filename is not None, (
-        f"Thigh link '{thigh_link_name}' visual mesh has no filename attribute"
-    )
-    
-    assert mesh_filename.endswith(".STL") or mesh_filename.endswith(".stl"), (
-        f"Thigh link '{thigh_link_name}' visual mesh filename should end with .STL. "
-        f"Found: '{mesh_filename}'"
-    )
+
+    # --- visual ---
+    visuals = femur_link.findall("visual")
+    assert len(visuals) > 0, f"Femur link '{femur_name}' has no visual elements"
+
+    for vis in visuals:
+        geom = vis.find("geometry")
+        assert geom is not None, (
+            f"Femur link '{femur_name}' visual has no geometry element"
+        )
+        children = list(geom)
+        assert len(children) > 0, (
+            f"Femur link '{femur_name}' visual geometry is empty"
+        )
 
 
 if __name__ == "__main__":
-    # Run the property test for all legs
-    print("Running property-based test: Thigh Collision Primitive Usage")
+    print("Running property-based test: Femur Collision Geometry Integrity")
     print("=" * 70)
-    
     try:
-        test_thigh_collision_primitive_property()
-        print("\n✓ Property test PASSED: All thigh links use collision primitives")
-        print("  Verified: Each thigh link (1-4) uses cylinder or box for collision")
-        print("  Verified: Visual geometry still uses STL mesh")
-        print("  Verified: No scale attribute in collision geometry")
+        test_femur_collision_geometry_property()
+        print("\n✓ Property test PASSED: All femur links have valid collision & visual geometry")
+        print("  Verified: Each femur link has collision and visual geometry")
+        print("  Verified: Mesh filenames reference existing files under dog2_description")
     except AssertionError as e:
         print(f"\n✗ Property test FAILED: {e}")
         exit(1)

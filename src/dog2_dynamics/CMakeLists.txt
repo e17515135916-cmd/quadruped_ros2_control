@@ -15,6 +15,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(pinocchio REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 
 # 包含目录
 include_directories(
@@ -47,6 +48,7 @@ target_link_libraries(test_dog2_model
 )
 
 ament_target_dependencies(test_dog2_model
+  ament_index_cpp
   rclcpp
 )
 
@@ -68,7 +70,7 @@ install(DIRECTORY include/
 # 导出
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})
-ament_export_dependencies(pinocchio Eigen3 rclcpp)
+ament_export_dependencies(pinocchio Eigen3 rclcpp ament_index_cpp)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
